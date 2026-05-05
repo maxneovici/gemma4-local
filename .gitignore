@@ -1,0 +1,9 @@
+bin/
+obj/
+.DS_Store
+.idea/
+.vscode/
+*.user
+*.suo
+TestResults/
+qdrant_storage/

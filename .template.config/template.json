@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "Local AI Baseline",
+  "classifications": ["Web", "AI", "Ollama", "Local"],
+  "identity": "Gemma4Local.Api.Template",
+  "name": "Local AI Experiment (.NET + Ollama)",
+  "shortName": "local-ai",
+  "sourceName": "Gemma4Local",
+  "preferNameDirectory": true,
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "symbols": {
+    "DefaultModel": {
+      "type": "parameter",
+      "datatype": "text",
+      "defaultValue": "gemma4:e2b",
+      "replaces": "gemma4:e2b",
+      "description": "Default local Ollama model tag."
+    }
+  },
+  "sources": [
+    {
+      "modifiers": [
+        {
+          "exclude": [
+            ".git/**",
+            "**/bin/**",
+            "**/obj/**",
+            ".template.config/**"
+          ]
+        }
+      ]
+    }
+  ]
+}

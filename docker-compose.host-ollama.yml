@@ -1,0 +1,28 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "5220:8080"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      LocalAi__BaseUrl: http://host.docker.internal:11434
+      LocalAi__RequireLoopback: "false"
+      LocalAi__ManageProcess: "false"
+      LocalAi__BlockStartupUntilModelsReady: "false"
+      LocalAi__Memory__QdrantBaseUrl: http://qdrant:6333
+    depends_on:
+      qdrant:
+        condition: service_started
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+
+volumes:
+  qdrant_storage:

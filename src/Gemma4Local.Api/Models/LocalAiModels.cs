@@ -1,0 +1,71 @@
+using System.Text.Json.Serialization;
+
+namespace Gemma4Local.Api.Models;
+
+public sealed record LocalChatRequest(
+    string? Message = null,
+    IReadOnlyList<LocalChatMessage>? Messages = null,
+    string? Model = null,
+    string? SystemPrompt = null,
+    bool EnableThinking = false,
+    double? Temperature = null,
+    double? TopP = null,
+    int? TopK = null);
+
+public sealed record LocalChatMessage(string Role, string Content);
+
+public sealed record LocalChatResponse(
+    string Model,
+    string Response,
+    double? TotalDurationMs,
+    int? PromptEvalCount,
+    int? EvalCount);
+
+public sealed record HealthResponse(bool IsHealthy, string Message);
+
+public sealed record ErrorResponse(string Error);
+
+public sealed record LocalModelResponse(string Name, double SizeGb, DateTimeOffset ModifiedAt);
+
+public sealed record OllamaChatRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("stream")] bool Stream,
+    [property: JsonPropertyName("messages")] IReadOnlyList<OllamaMessage> Messages,
+    [property: JsonPropertyName("options")] OllamaOptions Options);
+
+public sealed record OllamaPullRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("stream")] bool Stream);
+
+public sealed record OllamaMessage(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("content")] string Content);
+
+public sealed record OllamaOptions(
+    [property: JsonPropertyName("temperature")] double Temperature,
+    [property: JsonPropertyName("top_p")] double TopP,
+    [property: JsonPropertyName("top_k")] int TopK);
+
+public sealed record OllamaChatResponse(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("message")] OllamaMessage? Message,
+    [property: JsonPropertyName("total_duration")] long? TotalDuration,
+    [property: JsonPropertyName("prompt_eval_count")] int? PromptEvalCount,
+    [property: JsonPropertyName("eval_count")] int? EvalCount);
+
+public sealed record OllamaModelsResponse(
+    [property: JsonPropertyName("models")] IReadOnlyList<OllamaModel> Models);
+
+public sealed record OllamaModel(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("modified_at")] DateTimeOffset ModifiedAt,
+    [property: JsonPropertyName("size")] long Size);
+
+public sealed record OpenAiModelsResponse(
+    [property: JsonPropertyName("data")] IReadOnlyList<OllamaModelInfo> Data);
+
+public sealed record OllamaModelInfo(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("object")] string Object,
+    [property: JsonPropertyName("created")] long Created,
+    [property: JsonPropertyName("owned_by")] string OwnedBy);
