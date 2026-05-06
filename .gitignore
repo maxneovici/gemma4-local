@@ -9,4 +9,7 @@ TestResults/
 qdrant_storage/
 data/**/*.json
 data/documents/*
+src/**/data/**/*.json
+src/**/data/documents/*
 !data/**/.gitkeep
+!src/**/data/**/.gitkeep
