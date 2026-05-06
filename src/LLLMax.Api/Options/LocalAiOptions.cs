@@ -54,6 +54,8 @@ public sealed class LocalAiOptions
 
     public LocalApiDiscoveryOptions ApiDiscovery { get; init; } = new();
 
+    public LocalMcpOptions Mcp { get; init; } = new();
+
     public IReadOnlyList<AgentDefinition> Agents { get; init; } = [];
 
     public IReadOnlyList<LocalModelSeed> RequiredModels { get; init; } = [];
@@ -170,4 +172,15 @@ public sealed class LocalApiDiscoveryOptions
     public int MaxResponseCharacters { get; init; } = 20000;
 
     public string StorageFile { get; init; } = "api-registry.json";
+}
+
+public sealed class LocalMcpOptions
+{
+    public bool Enabled { get; init; } = true;
+
+    public bool RequireApproval { get; init; } = true;
+
+    public string StorageFile { get; init; } = "mcp-registry.json";
+
+    public int RequestTimeoutSeconds { get; init; } = 30;
 }

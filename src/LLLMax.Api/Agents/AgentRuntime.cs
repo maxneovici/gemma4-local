@@ -261,7 +261,7 @@ Loop guardrails:
     private IReadOnlyList<ILocalTool> GetAllowedTools(AgentDefinition agent, bool allowTools) =>
         allowTools
             ? toolRegistry.GetTools()
-                .Where(tool => agent.AllowedTools?.Contains(tool.Name, StringComparer.OrdinalIgnoreCase) == true)
+                .Where(tool => IsToolAllowed(agent, tool.Name))
                 .ToList()
             : [];
 
@@ -270,11 +270,16 @@ Loop guardrails:
 
     private static void EnsureToolAllowed(AgentDefinition agent, string toolName)
     {
-        if (agent.AllowedTools?.Contains(toolName, StringComparer.OrdinalIgnoreCase) != true)
+        if (!IsToolAllowed(agent, toolName))
         {
             throw new InvalidOperationException($"Agent '{agent.Name}' is not allowed to call tool '{toolName}'.");
         }
     }
+
+    private static bool IsToolAllowed(AgentDefinition agent, string toolName) =>
+        agent.AllowedTools?.Contains(toolName, StringComparer.OrdinalIgnoreCase) == true
+        || (toolName.StartsWith("mcp_", StringComparison.OrdinalIgnoreCase)
+            && agent.AllowedTools?.Contains("mcp:*", StringComparer.OrdinalIgnoreCase) == true);
 
     private async Task PersistInteractionAsync(AgentDefinition agent, AgentRunRequest request, string response, CancellationToken cancellationToken)
     {

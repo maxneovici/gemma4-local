@@ -2,8 +2,10 @@ using System.Text.Json.Serialization;
 using LLLMax.Api.Endpoints;
 using LLLMax.Api.Options;
 using LLLMax.Api.Agents;
+using LLLMax.Api.Approvals;
 using LLLMax.Api.Documents;
 using LLLMax.Api.Integrations;
+using LLLMax.Api.Mcp;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Services;
 using LLLMax.Api.Sessions;
@@ -50,6 +52,10 @@ builder.Services.AddHttpClient("integrations", (serviceProvider, client) =>
 
 builder.Services.AddSingleton<LocalDataPaths>();
 builder.Services.AddSingleton<LocalEndpointGuard>();
+builder.Services.AddSingleton<IApprovalStore, FileApprovalStore>();
+builder.Services.AddSingleton<IApprovalService, ApprovalService>();
+builder.Services.AddSingleton<IMcpRegistry, FileMcpRegistry>();
+builder.Services.AddSingleton<IMcpBridge, McpBridge>();
 builder.Services.AddSingleton<IOllamaApi, OllamaApi>();
 builder.Services.AddSingleton<ILocalModelSetupService, LocalModelSetupService>();
 builder.Services.AddSingleton<ILocalChatClient, OllamaLocalChatClient>();
@@ -99,6 +105,8 @@ app.MapFallbackToFile("index.html");
 
 app.MapLocalAiEndpoints();
 app.MapAgentEndpoints();
+app.MapApprovalEndpoints();
+app.MapMcpEndpoints();
 app.MapMemoryEndpoints();
 app.MapSessionEndpoints();
 app.MapTaskGraphEndpoints();

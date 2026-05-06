@@ -126,11 +126,17 @@ textarea:focus, input:focus, select:focus { border-color: rgba(184, 255, 92, 0.4
 .memory-search { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; margin-top: 0.65rem; }
 
 #consolidateSession { width: 100%; margin-top: 0.65rem; }
-.job-list, .task-graph, .node-list, .artifact-list { display: grid; gap: 0.45rem; }
+.job-list, .task-graph, .node-list, .artifact-list, .approval-list, .mcp-list { display: grid; gap: 0.45rem; }
 .job-list { margin-top: 0.6rem; }
-.job, .node, .active-node, .graph-head { border: 1px solid var(--line); border-radius: 11px; padding: 0.55rem 0.65rem; background: rgba(8, 8, 9, 0.52); }
+.job, .node, .active-node, .graph-head, .approval, .mcp-tool, .mcp-list details { border: 1px solid var(--line); border-radius: 11px; padding: 0.55rem 0.65rem; background: rgba(8, 8, 9, 0.52); }
 .job, .graph-head { display: flex; align-items: center; justify-content: space-between; gap: 0.55rem; }
-.job span, .graph-head span, .node span, .active-node { color: var(--muted); font-size: 0.72rem; }
+.job span, .graph-head span, .node span, .active-node, .approval span, .mcp-tool span, .mcp-list small { color: var(--muted); font-size: 0.72rem; }
+.approval p { margin: 0.35rem 0; color: #cfcfcf; font-size: 0.72rem; line-height: 1.35; }
+.approval.pending, .mcp-tool.pending { border-color: rgba(125, 211, 252, 0.38); }
+.approval.approved, .mcp-tool.approved { border-color: rgba(184, 255, 92, 0.26); }
+.approval.rejected, .mcp-tool.rejected { border-color: rgba(251, 113, 133, 0.38); }
+.mcp-list input { width: 100%; }
+.mcp-list summary { cursor: pointer; }
 .task-graph p { margin: 0; color: #d7d7d7; font-size: 0.78rem; line-height: 1.45; }
 .node { display: grid; gap: 0.25rem; border-left: 3px solid var(--accent-2); }
 .node.active { border-left-color: var(--accent); }

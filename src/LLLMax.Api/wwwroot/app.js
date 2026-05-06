@@ -6,7 +6,9 @@ const state = {
   tools: [],
   agents: [],
   taskGraph: null,
-  consolidationJobs: []
+  consolidationJobs: [],
+  approvals: [],
+  mcpServers: []
 };
 
 const $ = id => document.getElementById(id);
@@ -118,6 +120,40 @@ async function loadTools() {
   `).join('');
 }
 
+async function loadApprovals() {
+  state.approvals = await api('/approvals');
+  $('approvals').innerHTML = state.approvals.slice(0, 5).map(approval => `
+    <div class="approval ${escapeHtml(approval.status)}">
+      <strong>${escapeHtml(approval.title)}</strong>
+      <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}</span>
+      <p>${escapeHtml(approval.description)}</p>
+      ${approval.status === 'pending' ? `<div class="button-row"><button data-approve="${escapeHtml(approval.id)}" type="button">Approve</button><button data-reject="${escapeHtml(approval.id)}" type="button">Reject</button></div>` : ''}
+    </div>
+  `).join('') || '<p class="muted">No approval requests.</p>';
+
+  document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approve, true)));
+  document.querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.reject, false)));
+}
+
+async function loadMcpServers() {
+  state.mcpServers = await api('/mcp/servers');
+  $('mcpServers').innerHTML = state.mcpServers.map(server => `
+    <details>
+      <summary>${escapeHtml(server.name)} <small>${escapeHtml(server.transport)} · ${escapeHtml(server.status)}</small></summary>
+      ${(server.tools ?? []).map(tool => `
+        <div class="mcp-tool ${escapeHtml(tool.approvalStatus)}">
+          <strong>${escapeHtml(tool.name)}</strong>
+          <span>${escapeHtml(tool.approvalStatus)}</span>
+          <div class="button-row"><button data-mcp-approve="${escapeHtml(server.id)}:${escapeHtml(tool.name)}" type="button">Approve tool</button><button data-mcp-reject="${escapeHtml(server.id)}:${escapeHtml(tool.name)}" type="button">Reject tool</button></div>
+        </div>
+      `).join('')}
+    </details>
+  `).join('') || '<p class="muted">No MCP servers registered.</p>';
+
+  document.querySelectorAll('[data-mcp-approve]').forEach(button => button.addEventListener('click', () => decideMcpTool(button.dataset.mcpApprove, true)));
+  document.querySelectorAll('[data-mcp-reject]').forEach(button => button.addEventListener('click', () => decideMcpTool(button.dataset.mcpReject, false)));
+}
+
 async function loadSessions() {
   state.sessions = await api('/sessions');
   $('sessions').innerHTML = state.sessions.map(session => `
@@ -190,7 +226,7 @@ async function newSession() {
   $('sessionTitle').textContent = session.title;
   renderMessages(session.messages ?? []);
   await Promise.all([loadSessions(), loadMemoryStats()]);
-  await Promise.all([loadTaskGraph(), loadConsolidationJobs()]);
+  await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -200,7 +236,7 @@ async function openSession(id) {
   $('sessionTitle').textContent = session.title;
   $('modelSelect').value = session.model ?? '';
   renderMessages(session.messages ?? []);
-  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs()]);
+  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -230,7 +266,7 @@ async function sendMessage(event) {
     renderMessages(result.messages);
     renderMetrics(result.metrics);
     renderSteps(result.reasoningSteps);
-    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
   }, 'Thinking...').finally(() => $('sendButton').disabled = false);
 }
 
@@ -370,6 +406,43 @@ async function consolidateSession() {
   }, 'Consolidating memory...');
 }
 
+async function decideApproval(id, approve) {
+  await guarded(async () => {
+    await api(`/approvals/${id}/${approve ? 'approve' : 'reject'}`, {
+      method: 'POST',
+      body: JSON.stringify({ reason: approve ? 'Approved in local UI.' : 'Rejected in local UI.' })
+    });
+    await Promise.all([loadApprovals(), loadTools()]);
+  }, approve ? 'Approving request...' : 'Rejecting request...');
+}
+
+async function registerMcp() {
+  await guarded(async () => {
+    const name = $('mcpName').value.trim();
+    const endpoint = $('mcpEndpoint').value.trim();
+    const tool = $('mcpTool').value.trim();
+    if (!name || !endpoint || !tool) throw new Error('MCP name, endpoint, and tool are required.');
+    await api('/mcp/servers', {
+      method: 'POST',
+      body: JSON.stringify({
+        name,
+        transport: 'http',
+        endpoint,
+        tools: [{ name: tool, description: `MCP tool ${tool}`, argumentsJsonSchema: { type: 'object', additionalProperties: true } }]
+      })
+    });
+    await Promise.all([loadMcpServers(), loadTools()]);
+  }, 'Registering MCP tool...');
+}
+
+async function decideMcpTool(value, approve) {
+  await guarded(async () => {
+    const [serverId, toolName] = value.split(':');
+    await api(`/mcp/servers/${serverId}/tools/${encodeURIComponent(toolName)}/${approve ? 'approve' : 'reject'}`, { method: 'POST' });
+    await Promise.all([loadMcpServers(), loadTools()]);
+  }, approve ? 'Approving MCP tool...' : 'Rejecting MCP tool...');
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -394,6 +467,7 @@ $('extractInvoice').addEventListener('click', () => runDocumentAction('/document
 $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
+$('registerMcp').addEventListener('click', registerMcp);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
@@ -403,7 +477,7 @@ renderMetrics(null);
 renderSteps([]);
 
 await guarded(async () => {
-  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs()]);
+  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 
   if (state.sessions[0]) {
