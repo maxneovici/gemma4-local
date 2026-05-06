@@ -53,6 +53,7 @@ builder.Services.AddSingleton<IOllamaApi, OllamaApi>();
 builder.Services.AddSingleton<ILocalModelSetupService, LocalModelSetupService>();
 builder.Services.AddSingleton<ILocalChatClient, OllamaLocalChatClient>();
 builder.Services.AddSingleton<IModelRouter, ModelRouter>();
+builder.Services.AddSingleton<INativeToolChatClient, OllamaNativeToolChatClient>();
 builder.Services.AddSingleton<IAgentRegistry, MarkdownAgentRegistry>();
 builder.Services.AddSingleton<IAgentRuntime, AgentRuntime>();
 builder.Services.AddSingleton<ILocalToolRegistry, LocalToolRegistry>();

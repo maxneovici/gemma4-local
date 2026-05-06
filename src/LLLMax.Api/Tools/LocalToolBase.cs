@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using LLLMax.Api.Models;
 using NJsonSchema;
 
 namespace LLLMax.Api.Tools;
@@ -14,6 +16,13 @@ public abstract class LocalToolBase<TArguments> : ILocalTool
     public abstract string Description { get; }
 
     public string ArgumentsJsonSchema => SchemaJson;
+
+    public OllamaToolDefinition ToOllamaToolDefinition() => new(
+        Type: "function",
+        Function: new OllamaToolFunction(
+            Name: Name,
+            Description: Description,
+            Parameters: JsonNode.Parse(ArgumentsJsonSchema) ?? new JsonObject()));
 
     public async Task<LocalToolResult> InvokeAsync(LocalToolInvocation invocation, CancellationToken cancellationToken)
     {

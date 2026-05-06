@@ -7,6 +7,7 @@ obj/
 *.suo
 TestResults/
 qdrant_storage/
+data/*.log
 data/**/*.json
 data/documents/*
 src/**/data/**/*.json

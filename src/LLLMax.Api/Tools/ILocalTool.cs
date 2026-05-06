@@ -1,3 +1,5 @@
+using LLLMax.Api.Models;
+
 namespace LLLMax.Api.Tools;
 
 public interface ILocalTool
@@ -7,6 +9,8 @@ public interface ILocalTool
     string Description { get; }
 
     string ArgumentsJsonSchema { get; }
+
+    OllamaToolDefinition ToOllamaToolDefinition();
 
     Task<LocalToolResult> InvokeAsync(LocalToolInvocation invocation, CancellationToken cancellationToken);
 }

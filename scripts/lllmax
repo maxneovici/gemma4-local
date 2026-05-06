@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${LLLMAX_PORT:-5220}"
+LOG="${LLLMAX_LOG:-$ROOT/data/lllmax.log}"
+MODEL="${LLLMAX_MODEL:-gemma4:31b}"
+
+mkdir -p "$(dirname "$LOG")"
+
+if command -v lsof >/dev/null 2>&1; then
+  pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)"
+  if [[ -n "$pids" ]]; then
+    kill $pids || true
+  fi
+fi
+
+ASPNETCORE_URLS="http://localhost:$PORT" \
+LocalAi__ManageProcess=false \
+LocalAi__DefaultModel="$MODEL" \
+dotnet run --project "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" --no-build > "$LOG" 2>&1 &
+
+echo "LLLMax started on http://localhost:$PORT using $MODEL"
+echo "Logs: $LOG"

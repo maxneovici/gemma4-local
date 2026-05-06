@@ -28,6 +28,10 @@
         <h2>Agents</h2>
         <div id="agents" class="list compact"></div>
       </section>
+      <section>
+        <h2>Tools</h2>
+        <div id="tools" class="tool-list"></div>
+      </section>
     </aside>
 
     <section class="chat-card">
@@ -35,6 +39,7 @@
         <div>
           <p class="eyebrow">Local orchestration loop</p>
           <h2 id="sessionTitle">Ready</h2>
+          <p id="statusLine" class="status-line">Connecting to local runtime...</p>
         </div>
         <div class="controls">
           <label>Model <select id="modelSelect"></select></label>
@@ -46,11 +51,28 @@
 
       <form id="chatForm" class="composer">
         <textarea id="prompt" rows="3" placeholder="Ask LLLMax to research, route, extract, summarize, or use a scoped tool..."></textarea>
-        <button class="primary" type="submit">Send</button>
+        <div class="send-stack">
+          <label class="toggle"><input id="allowTools" type="checkbox" checked> tools</label>
+          <label class="toggle"><input id="persistMemory" type="checkbox" checked> memory</label>
+          <button id="sendButton" class="primary" type="submit">Send</button>
+        </div>
       </form>
     </section>
 
     <aside class="panel right-panel">
+      <section>
+        <h2>Runtime</h2>
+        <div id="runtime" class="runtime-grid"></div>
+      </section>
+      <section>
+        <h2>Memory</h2>
+        <div id="memoryStats" class="memory-stats"></div>
+        <div class="memory-search">
+          <input id="memoryQuery" placeholder="search local memory">
+          <button id="searchMemory" type="button">Search</button>
+        </div>
+        <pre id="memoryResults"></pre>
+      </section>
       <section>
         <h2>Metrics</h2>
         <div id="metrics" class="metrics"></div>

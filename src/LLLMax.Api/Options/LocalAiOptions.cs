@@ -42,6 +42,8 @@ public sealed class LocalAiOptions
 
     public LocalAiModelRouterOptions ModelRouter { get; init; } = new();
 
+    public LocalAiNativeToolCallingOptions NativeToolCalling { get; init; } = new();
+
     public LocalMemoryOptions Memory { get; init; } = new();
 
     public LocalToolOptions Tools { get; init; } = new();
@@ -126,6 +128,13 @@ public sealed class LocalAiModelRouterOptions
     public string DefaultReasoningEffort { get; init; } = "auto";
 
     public int ShortRequestWordThreshold { get; init; } = 18;
+}
+
+public sealed class LocalAiNativeToolCallingOptions
+{
+    public bool Enabled { get; init; } = true;
+
+    public bool PreferNativeTools { get; init; } = true;
 }
 
 public sealed class LocalDocumentOptions

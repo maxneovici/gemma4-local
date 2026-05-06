@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using System.Text.Json.Nodes;
 
 namespace LLLMax.Api.Models;
 
@@ -33,6 +34,15 @@ public sealed record OllamaChatRequest(
     [property: JsonPropertyName("stream")] bool Stream,
     [property: JsonPropertyName("messages")] IReadOnlyList<OllamaMessage> Messages,
     [property: JsonPropertyName("options")] OllamaOptions Options,
+    [property: JsonPropertyName("think")] bool? Think = null,
+    [property: JsonPropertyName("tools")] IReadOnlyList<OllamaToolDefinition>? Tools = null);
+
+public sealed record OllamaNativeToolChatRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("stream")] bool Stream,
+    [property: JsonPropertyName("messages")] IReadOnlyList<OllamaNativeMessage> Messages,
+    [property: JsonPropertyName("options")] OllamaOptions Options,
+    [property: JsonPropertyName("tools")] IReadOnlyList<OllamaToolDefinition> Tools,
     [property: JsonPropertyName("think")] bool? Think = null);
 
 public sealed record OllamaPullRequest(
@@ -42,6 +52,27 @@ public sealed record OllamaPullRequest(
 public sealed record OllamaMessage(
     [property: JsonPropertyName("role")] string Role,
     [property: JsonPropertyName("content")] string Content);
+
+public sealed record OllamaNativeMessage(
+    [property: JsonPropertyName("role")] string Role,
+    [property: JsonPropertyName("content")] string? Content,
+    [property: JsonPropertyName("tool_calls")] IReadOnlyList<OllamaToolCall>? ToolCalls = null);
+
+public sealed record OllamaToolDefinition(
+    [property: JsonPropertyName("type")] string Type,
+    [property: JsonPropertyName("function")] OllamaToolFunction Function);
+
+public sealed record OllamaToolFunction(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("parameters")] JsonNode Parameters);
+
+public sealed record OllamaToolCall(
+    [property: JsonPropertyName("function")] OllamaToolCallFunction Function);
+
+public sealed record OllamaToolCallFunction(
+    [property: JsonPropertyName("name")] string Name,
+    [property: JsonPropertyName("arguments")] JsonObject Arguments);
 
 public sealed record OllamaVisionMessage(
     [property: JsonPropertyName("role")] string Role,
@@ -62,7 +93,7 @@ public sealed record OllamaOptions(
 
 public sealed record OllamaChatResponse(
     [property: JsonPropertyName("model")] string Model,
-    [property: JsonPropertyName("message")] OllamaMessage? Message,
+    [property: JsonPropertyName("message")] OllamaNativeMessage? Message,
     [property: JsonPropertyName("total_duration")] long? TotalDuration,
     [property: JsonPropertyName("prompt_eval_count")] int? PromptEvalCount,
     [property: JsonPropertyName("eval_count")] int? EvalCount);

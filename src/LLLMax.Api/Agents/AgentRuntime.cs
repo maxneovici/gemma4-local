@@ -11,6 +11,7 @@ namespace LLLMax.Api.Agents;
 public sealed class AgentRuntime(
     IAgentRegistry agentRegistry,
     ILocalChatClient chatClient,
+    INativeToolChatClient nativeToolChatClient,
     ILocalToolRegistry toolRegistry,
     ILocalMemoryStore memoryStore,
     IModelRouter modelRouter,
@@ -27,6 +28,7 @@ public sealed class AgentRuntime(
         var toolContext = BuildToolContext(agent, request.AllowTools);
         var route = modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model, request.ReasoningEffort));
         var prompt = BuildSystemPrompt(agent, memoryContext, toolContext);
+        var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
         reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}", DateTimeOffset.UtcNow));
 
@@ -36,15 +38,49 @@ public sealed class AgentRuntime(
 
         for (var iteration = 0; iteration <= maxIterations; iteration++)
         {
-            response = await chatClient.ChatAsync(new LocalChatRequest(
-                Model: route.Model,
-                Messages: messages,
-                EnableThinking: route.EnableThinking,
-                Temperature: route.Temperature), cancellationToken);
+            ParsedToolCall? toolCall = null;
+
+            if (ShouldUseNativeToolCalling(request.AllowTools, allowedTools))
+            {
+                var nativeResponse = await nativeToolChatClient.ChatAsync(new NativeToolChatRequest(
+                    Model: route.Model,
+                    Messages: messages,
+                    Tools: allowedTools,
+                    EnableThinking: route.EnableThinking,
+                    Temperature: route.Temperature), cancellationToken);
+
+                response = new LocalChatResponse(
+                    Model: nativeResponse.Model,
+                    Response: nativeResponse.Content,
+                    TotalDurationMs: nativeResponse.Metrics.TotalDurationMs,
+                    PromptEvalCount: nativeResponse.Metrics.PromptEvalCount,
+                    EvalCount: nativeResponse.Metrics.EvalCount,
+                    TokensPerSecond: nativeResponse.Metrics.TokensPerSecond);
+
+                toolCall = nativeResponse.ToolCalls.FirstOrDefault();
+
+                if (toolCall is not null)
+                {
+                    reasoningSteps.Add(new ReasoningStep("native_tool_call", toolCall.Tool, DateTimeOffset.UtcNow));
+                }
+            }
+            else
+            {
+                response = await chatClient.ChatAsync(new LocalChatRequest(
+                    Model: route.Model,
+                    Messages: messages,
+                    EnableThinking: route.EnableThinking,
+                    Temperature: route.Temperature), cancellationToken);
+            }
 
             reasoningSteps.Add(new ReasoningStep("model", response.Response, DateTimeOffset.UtcNow));
 
-            if (!request.AllowTools || !ToolCallParser.TryParse(response.Response, out var toolCall))
+            if (toolCall is null && request.AllowTools)
+            {
+                ToolCallParser.TryParse(response.Response, out toolCall);
+            }
+
+            if (!request.AllowTools || toolCall is null)
             {
                 break;
             }
@@ -184,12 +220,21 @@ Completion protocol:
             return "Tool use is disabled for this request.";
         }
 
-        var tools = toolRegistry.GetTools()
-            .Where(tool => agent.AllowedTools?.Contains(tool.Name, StringComparer.OrdinalIgnoreCase) == true)
+        var tools = GetAllowedTools(agent, allowTools)
             .Select(tool => $"- {tool.Name}: {tool.Description}. Arguments JSON schema: {tool.ArgumentsJsonSchema}");
 
         return string.Join(Environment.NewLine, tools);
     }
+
+    private IReadOnlyList<ILocalTool> GetAllowedTools(AgentDefinition agent, bool allowTools) =>
+        allowTools
+            ? toolRegistry.GetTools()
+                .Where(tool => agent.AllowedTools?.Contains(tool.Name, StringComparer.OrdinalIgnoreCase) == true)
+                .ToList()
+            : [];
+
+    private bool ShouldUseNativeToolCalling(bool allowTools, IReadOnlyList<ILocalTool> allowedTools) =>
+        allowTools && allowedTools.Count > 0 && _options.NativeToolCalling.Enabled && _options.NativeToolCalling.PreferNativeTools;
 
     private static void EnsureToolAllowed(AgentDefinition agent, string toolName)
     {

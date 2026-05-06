@@ -81,6 +81,9 @@ button:hover { border-color: var(--accent); }
 .brand h1, .brand p, .chat-header h2, .eyebrow { margin: 0; }
 .brand p, .muted, .eyebrow { color: var(--muted); }
 .eyebrow { text-transform: uppercase; letter-spacing: 0.16em; font-size: 0.72rem; }
+.status-line { margin: 0.3rem 0 0; color: var(--muted); font-size: 0.82rem; }
+.status-line[data-kind="busy"] { color: var(--accent-2); }
+.status-line[data-kind="error"] { color: var(--danger); }
 
 section { margin-top: 1.25rem; }
 section h2 { margin: 0 0 0.65rem; font-size: 0.92rem; color: #c4b5fd; }
@@ -93,6 +96,17 @@ section h2 { margin: 0 0 0.65rem; font-size: 0.92rem; color: #c4b5fd; }
 }
 .list button.active, .list button:hover { color: var(--text); background: rgba(124, 58, 237, 0.22); }
 .compact button { font-size: 0.86rem; }
+
+.tool-list { display: grid; gap: 0.45rem; }
+.tool-list details {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 0.65rem;
+  background: rgba(2, 6, 23, 0.34);
+}
+.tool-list summary { cursor: pointer; color: var(--text); }
+.tool-list p { margin: 0.45rem 0; color: var(--muted); font-size: 0.82rem; }
+.tool-list code { color: var(--accent-2); font-size: 0.76rem; }
 
 .chat-card {
   display: grid;
@@ -167,6 +181,32 @@ textarea {
   padding: 0.9rem;
 }
 
+.send-stack { display: grid; gap: 0.45rem; align-content: end; }
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+.toggle input { padding: 0; }
+
+.runtime-grid, .memory-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.runtime-pill {
+  padding: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(2, 6, 23, 0.36);
+}
+.runtime-pill span { display: block; color: var(--muted); font-size: 0.72rem; }
+.runtime-pill strong { display: block; margin-top: 0.2rem; }
+.memory-search { display: grid; grid-template-columns: 1fr auto; gap: 0.5rem; margin-top: 0.65rem; }
+
 .metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -206,7 +246,7 @@ pre { overflow: auto; max-height: 170px; color: #cbd5e1; }
 
 @media (max-width: 1180px) {
   .shell { grid-template-columns: 240px minmax(0, 1fr); }
-  .right-panel { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+  .right-panel { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
 }
 
 @media (max-width: 780px) {

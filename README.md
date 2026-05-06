@@ -110,6 +110,24 @@ dotnet run --project src/LLLMax.Api
 
 The API listens on `http://localhost:5220` with the default launch profile.
 
+For a restart-friendly one-liner that kills anything currently listening on port `5220` and starts LLLMax in the background:
+
+```bash
+scripts/lllmax
+```
+
+Optional shell alias:
+
+```bash
+alias lllmax="/Users/maxfalk/repos/gemma4-local/scripts/lllmax"
+```
+
+Override the default smoke-test model or port when needed:
+
+```bash
+LLLMAX_MODEL=gemma4:e2b LLLMAX_PORT=5221 scripts/lllmax
+```
+
 Open the built-in PWA chat interface:
 
 ```text

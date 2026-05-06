@@ -8,9 +8,9 @@ public static class ToolCallParser
     {
         toolCall = default!;
 
-        var trimmed = text.Trim();
+        var trimmed = ExtractJsonObject(text.Trim());
 
-        if (!trimmed.StartsWith('{') || !trimmed.EndsWith('}'))
+        if (trimmed is null)
         {
             return false;
         }
@@ -36,6 +36,65 @@ public static class ToolCallParser
         {
             return false;
         }
+    }
+
+    private static string? ExtractJsonObject(string text)
+    {
+        var start = text.IndexOf('{');
+
+        if (start < 0)
+        {
+            return null;
+        }
+
+        var depth = 0;
+        var inString = false;
+        var escaped = false;
+
+        for (var index = start; index < text.Length; index++)
+        {
+            var character = text[index];
+
+            if (escaped)
+            {
+                escaped = false;
+                continue;
+            }
+
+            if (character == '\\' && inString)
+            {
+                escaped = true;
+                continue;
+            }
+
+            if (character == '"')
+            {
+                inString = !inString;
+                continue;
+            }
+
+            if (inString)
+            {
+                continue;
+            }
+
+            if (character == '{')
+            {
+                depth++;
+            }
+
+            if (character == '}')
+            {
+                depth--;
+
+                if (depth == 0)
+                {
+                    return text[start..(index + 1)];
+                }
+            }
+        }
+
+        return null;
     }
 }
 

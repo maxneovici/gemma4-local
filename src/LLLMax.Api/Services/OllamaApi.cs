@@ -71,6 +71,22 @@ public sealed class OllamaApi(IHttpClientFactory httpClientFactory, LocalEndpoin
             ?? throw new InvalidOperationException("Ollama returned an empty chat response.");
     }
 
+    public async Task<OllamaChatResponse> ChatWithToolsAsync(OllamaNativeToolChatRequest request, CancellationToken cancellationToken)
+    {
+        endpointGuard.ThrowIfRemoteEndpoint();
+
+        var response = await httpClientFactory.CreateClient("ollama").PostAsJsonAsync("/api/chat", request, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"Ollama tool chat returned {(int)response.StatusCode}: {error}");
+        }
+
+        return await response.Content.ReadFromJsonAsync<OllamaChatResponse>(cancellationToken)
+            ?? throw new InvalidOperationException("Ollama returned an empty tool chat response.");
+    }
+
     public async Task<OllamaChatResponse> ChatVisionAsync(OllamaVisionChatRequest request, CancellationToken cancellationToken)
     {
         endpointGuard.ThrowIfRemoteEndpoint();
