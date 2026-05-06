@@ -1,4 +1,4 @@
-# Local AI Baseline Agents
+# LLLMax Agents
 
 This repo is a template for local-only LLM experiments. Keep all inference, embeddings, tool execution, and vector memory on loopback or local Docker services unless the user explicitly changes the architecture.
 
@@ -35,8 +35,8 @@ This repo is a template for local-only LLM experiments. Keep all inference, embe
 
 ## Extension Points
 
-- Add new tools under `src/Gemma4Local.Api/Tools` and register them in `Program.cs`.
-- Add persistent vector stores under `src/Gemma4Local.Api/Memory` and bind them behind `ILocalMemoryStore`.
+- Add new tools under `src/LLLMax.Api/Tools` and register them in `Program.cs`.
+- Add persistent vector stores under `src/LLLMax.Api/Memory` and bind them behind `ILocalMemoryStore`.
 - Keep endpoint handlers thin; business behavior belongs in services.
 
 ## High-Leverage Next Tools

@@ -1,6 +1,6 @@
-# Gemma4 Local
+# LLLMax
 
-Local-only .NET baseline for LLM experimentation with Ollama on Apple Silicon.
+Local-first .NET 9 assistant scaffold for Ollama on Apple Silicon, built around scoped tools, persistent local memory, dynamic subagents, document understanding, and a hosted PWA chat interface.
 
 The app is intentionally configured to use loopback-only Ollama endpoints by default. It does not call OpenAI, Azure OpenAI, Ollama Cloud, or any other remote inference service.
 
@@ -11,10 +11,13 @@ The app is intentionally configured to use loopback-only Ollama endpoints by def
 - `OllamaModelHostedService` can optionally pull the configured model if missing.
 - `IOllamaApi` wraps Ollama's local HTTP API.
 - `ILocalChatClient` is the DI abstraction app code should use.
-- `IAgentRuntime` runs configured local agents.
+- `IAgentRuntime` runs configured local agents with a multi-iteration tool loop.
+- `MarkdownAgentRegistry` merges configured agents with dynamic `.md` agent definitions in `data/agents`.
+- `IAssistantOrchestrator` owns sessions, context estimation, and summarization near context limits.
+- `IModelRouter` chooses interactive, balanced, or deep-reasoning models per request.
 - `ILocalToolRegistry` exposes local tools to agents.
-- `ILocalMemoryStore` stores local vector memory.
-- `/chat`, `/agents`, `/memory`, `/models`, `/health`, and `/openai` expose a local API for experiments.
+- `ILocalMemoryStore` stores local vector memory; the default implementation persists JSON under `data/memory`.
+- `/`, `/sessions`, `/agents`, `/memory`, `/documents`, `/integrations`, `/models`, `/health`, and `/openai` expose the local app and API.
 
 ## Prerequisites
 
@@ -30,7 +33,7 @@ brew install --formula ollama
 
 ## Configuration
 
-Defaults are in `src/Gemma4Local.Api/appsettings.json`:
+Defaults are in `src/LLLMax.Api/appsettings.json`:
 
 ```json
 {
@@ -43,7 +46,7 @@ Defaults are in `src/Gemma4Local.Api/appsettings.json`:
     "EnsureDefaultModel": false,
     "Memory": {
       "Enabled": true,
-      "Provider": "InMemory",
+      "Provider": "File",
       "EmbeddingModel": "nomic-embed-text"
     }
   }
@@ -62,14 +65,14 @@ Important flags:
 To let the app start Ollama and pull the default model if missing:
 
 ```bash
-LocalAi__ManageProcess=true LocalAi__EnsureDefaultModel=true dotnet run --project src/Gemma4Local.Api
+LocalAi__ManageProcess=true LocalAi__EnsureDefaultModel=true dotnet run --project src/LLLMax.Api
 ```
 
 To use an already-running Ollama service:
 
 ```bash
 brew services start ollama
-LocalAi__ManageProcess=false dotnet run --project src/Gemma4Local.Api
+LocalAi__ManageProcess=false dotnet run --project src/LLLMax.Api
 ```
 
 ## Models
@@ -96,18 +99,24 @@ Useful Gemma 4 model tags:
 Switch model with configuration:
 
 ```bash
-LocalAi__DefaultModel=gemma4:31b dotnet run --project src/Gemma4Local.Api
+LocalAi__DefaultModel=gemma4:31b dotnet run --project src/LLLMax.Api
 ```
 
 ## Run
 
 ```bash
-dotnet run --project src/Gemma4Local.Api
+dotnet run --project src/LLLMax.Api
 ```
 
 The API listens on `http://localhost:5220` with the default launch profile.
 
-Open the built-in frontend/API explorer:
+Open the built-in PWA chat interface:
+
+```text
+http://localhost:5220/
+```
+
+Open Swagger/API explorer:
 
 ```text
 http://localhost:5220/swagger
@@ -123,6 +132,7 @@ docker compose up --build
 
 This exposes:
 
+- PWA: `http://localhost:5220/`
 - API and Swagger: `http://localhost:5220/swagger`
 - Ollama: `http://localhost:11434`
 - Qdrant: `http://localhost:6333`
@@ -175,7 +185,7 @@ curl http://localhost:5220/setup/pull \
 If you want the app to wait until startup models are pulled before it reports startup complete:
 
 ```bash
-LocalAi__BlockStartupUntilModelsReady=true dotnet run --project src/Gemma4Local.Api
+LocalAi__BlockStartupUntilModelsReady=true dotnet run --project src/LLLMax.Api
 ```
 
 ## Call It
@@ -272,7 +282,7 @@ This is intentionally simple and debuggable. Native OpenAI/Ollama tool calling c
 The template includes a powerful but safe path for agents to verify local ideas:
 
 ```bash
-LocalAi__Tools__EnableSafeShell=true dotnet run --project src/Gemma4Local.Api
+LocalAi__Tools__EnableSafeShell=true dotnet run --project src/LLLMax.Api
 ```
 
 Default allowlisted commands:
@@ -299,7 +309,7 @@ The memory architecture has two abstractions:
 - `IEmbeddingGenerator` creates vectors locally.
 - `ILocalMemoryStore` stores and searches vectors.
 
-The default store is `InMemoryVectorStore`, which is good for experiments and tests but not persistent.
+The default store is `FileVectorStore`, which persists vectorized memories under `data/memory` between sessions. `InMemoryVectorStore` remains available with `LocalAi:Memory:Provider=InMemory` for experiments and tests.
 
 Store memory:
 
@@ -342,7 +352,7 @@ Qdrant endpoints:
 - HTTP: `http://127.0.0.1:6333`
 - gRPC: `http://127.0.0.1:6334`
 
-The app currently defaults to `InMemoryVectorStore`. The intended next implementation step is a `QdrantMemoryStore : ILocalMemoryStore` selected by `LocalAi:Memory:Provider=Qdrant`.
+The app currently keeps Qdrant available in Docker for the next persistent-vector-store implementation. The default file-backed store gives immediate local persistence without requiring a database.
 
 ## OpenAI Compatibility
 
@@ -395,7 +405,7 @@ For this baseline, keep model startup/process ownership in your own hosted servi
 Install this repo as a local .NET template:
 
 ```bash
-dotnet new install /Users/maxfalk/repos/gemma4-local
+dotnet new install /Users/maxfalk/repos/LLLMax
 ```
 
 Create a new experiment repo from it:
@@ -409,7 +419,7 @@ dotnet new local-ai --name MyLocalAiExperiment --DefaultModel gemma4:e2b
 Uninstall the template:
 
 ```bash
-dotnet new uninstall /Users/maxfalk/repos/gemma4-local
+dotnet new uninstall /Users/maxfalk/repos/LLLMax
 ```
 
 ## Frontier App Playbook

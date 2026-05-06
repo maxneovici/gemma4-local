@@ -12,11 +12,14 @@ services:
       LocalAi__ManageProcess: "false"
       LocalAi__BlockStartupUntilModelsReady: "false"
       LocalAi__Memory__QdrantBaseUrl: http://qdrant:6333
+      LocalAi__DataDirectory: /app/data
     depends_on:
       ollama:
         condition: service_started
       qdrant:
         condition: service_started
+    volumes:
+      - lllmax_data:/app/data
 
   ollama:
     image: ollama/ollama:0.23.0
@@ -39,5 +42,6 @@ services:
       - qdrant_storage:/qdrant/storage
 
 volumes:
+  lllmax_data:
   qdrant_storage:
   ollama_models:

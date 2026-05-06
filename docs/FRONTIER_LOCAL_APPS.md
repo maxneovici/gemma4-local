@@ -5,7 +5,7 @@ This template is designed for fast local AI experiments that can grow into deplo
 ## Fast Experiment Loop
 
 1. Add or edit an agent in `LocalAi:Agents`.
-2. Add a local tool under `src/Gemma4Local.Api/Tools`.
+2. Add a local tool under `src/LLLMax.Api/Tools`.
 3. Register the tool in `Program.cs`.
 4. Test through Swagger at `/swagger`.
 5. Persist findings to memory with `/memory/upsert` or the `memory_write` tool.

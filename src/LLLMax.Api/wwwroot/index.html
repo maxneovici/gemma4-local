@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#7c3aed">
+  <title>LLLMax</title>
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <aside class="panel left-panel">
+      <div class="brand">
+        <img src="/icon.svg" alt="LLLMax logo">
+        <div>
+          <h1>LLLMax</h1>
+          <p>Frontier local assistant</p>
+        </div>
+      </div>
+      <button id="newSession" class="primary">New session</button>
+      <section>
+        <h2>Sessions</h2>
+        <div id="sessions" class="list"></div>
+      </section>
+      <section>
+        <h2>Agents</h2>
+        <div id="agents" class="list compact"></div>
+      </section>
+    </aside>
+
+    <section class="chat-card">
+      <header class="chat-header">
+        <div>
+          <p class="eyebrow">Local orchestration loop</p>
+          <h2 id="sessionTitle">Ready</h2>
+        </div>
+        <div class="controls">
+          <label>Model <select id="modelSelect"></select></label>
+          <label>Reasoning <input id="effort" type="range" min="0" max="2" step="1" value="1"><span id="effortLabel">auto</span></label>
+        </div>
+      </header>
+
+      <div id="messages" class="messages"></div>
+
+      <form id="chatForm" class="composer">
+        <textarea id="prompt" rows="3" placeholder="Ask LLLMax to research, route, extract, summarize, or use a scoped tool..."></textarea>
+        <button class="primary" type="submit">Send</button>
+      </form>
+    </section>
+
+    <aside class="panel right-panel">
+      <section>
+        <h2>Metrics</h2>
+        <div id="metrics" class="metrics"></div>
+      </section>
+      <section>
+        <h2>Reasoning Steps</h2>
+        <div id="steps" class="steps"></div>
+      </section>
+      <section>
+        <h2>Documents</h2>
+        <input id="documentFile" type="file">
+        <div class="button-row">
+          <button id="uploadDocument" type="button">Upload</button>
+          <button id="runOcr" type="button">OCR</button>
+          <button id="extractInvoice" type="button">Invoice</button>
+        </div>
+        <p id="documentStatus" class="muted">No document uploaded.</p>
+      </section>
+      <section>
+        <h2>API Discovery</h2>
+        <input id="apiName" placeholder="name">
+        <input id="apiBaseUrl" placeholder="http://127.0.0.1:5220">
+        <button id="discoverApi" type="button">Discover API</button>
+        <pre id="apiResult"></pre>
+      </section>
+    </aside>
+  </main>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>

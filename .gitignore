@@ -7,3 +7,6 @@ obj/
 *.suo
 TestResults/
 qdrant_storage/
+data/**/*.json
+data/documents/*
+!data/**/.gitkeep

@@ -1,11 +1,11 @@
 {
   "$schema": "http://json.schemastore.org/template",
-  "author": "Local AI Baseline",
+  "author": "LLLMax",
   "classifications": ["Web", "AI", "Ollama", "Local"],
-  "identity": "Gemma4Local.Api.Template",
+  "identity": "LLLMax.Api.Template",
   "name": "Local AI Experiment (.NET + Ollama)",
   "shortName": "local-ai",
-  "sourceName": "Gemma4Local",
+  "sourceName": "LLLMax",
   "preferNameDirectory": true,
   "tags": {
     "language": "C#",
