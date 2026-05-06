@@ -75,5 +75,16 @@ public sealed class FileAssistantSessionStore(LocalDataPaths paths, IOptions<Loc
         await JsonSerializer.SerializeAsync(stream, session, JsonOptions, cancellationToken);
     }
 
+    public Task DeleteAllAsync(CancellationToken cancellationToken)
+    {
+        foreach (var file in Directory.EnumerateFiles(paths.SessionsDirectory, "*.json"))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Delete(file);
+        }
+
+        return Task.CompletedTask;
+    }
+
     private string GetPath(string id) => Path.Combine(paths.SessionsDirectory, $"{id}.json");
 }

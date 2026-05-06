@@ -21,6 +21,12 @@ public static class SessionEndpoints
         group.MapPost("/", async (SessionCreateRequest request, IAssistantSessionStore sessions, CancellationToken cancellationToken) =>
             Results.Ok(await sessions.CreateAsync(request, cancellationToken)));
 
+        group.MapDelete("/", async (IAssistantSessionStore sessions, CancellationToken cancellationToken) =>
+        {
+            await sessions.DeleteAllAsync(cancellationToken);
+            return Results.NoContent();
+        });
+
         group.MapGet("/{id}", async (string id, IAssistantSessionStore sessions, CancellationToken cancellationToken) =>
         {
             try

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#7c3aed">
+    <meta name="theme-color" content="#0f172a">
   <title>LLLMax</title>
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="icon" href="/icon.svg" type="image/svg+xml">
@@ -27,22 +27,23 @@
         </div>
       </div>
       <button id="newSession" class="primary">New session</button>
-      <section>
-        <h2>Sessions</h2>
+      <details class="panel-section" open>
+        <summary>Previous Sessions</summary>
+        <button id="deleteSessions" class="danger-button" type="button">Delete all sessions</button>
         <div id="sessions" class="list"></div>
-      </section>
-      <section>
-        <h2>Agents</h2>
+      </details>
+      <details class="panel-section">
+        <summary>Agents</summary>
         <div id="agents" class="list compact"></div>
-      </section>
-      <section>
-        <h2>Tools</h2>
+      </details>
+      <details class="panel-section">
+        <summary>Tools</summary>
         <div id="tools" class="tool-list"></div>
-      </section>
-      <section>
-        <h2>Approvals</h2>
+      </details>
+      <details class="panel-section" open>
+        <summary>Approvals</summary>
         <div id="approvals" class="approval-list"></div>
-      </section>
+      </details>
     </aside>
 
     <section class="chat-card">
@@ -71,12 +72,12 @@
     </section>
 
     <aside class="panel right-panel">
-      <section>
-        <h2>Runtime</h2>
+      <details class="panel-section" open>
+        <summary>Runtime</summary>
         <div id="runtime" class="runtime-grid"></div>
-      </section>
-      <section>
-        <h2>Memory</h2>
+      </details>
+      <details class="panel-section" open>
+        <summary>Memory</summary>
         <div id="memoryStats" class="memory-stats"></div>
         <button id="consolidateSession" type="button">Consolidate session</button>
         <div id="consolidationJobs" class="job-list"></div>
@@ -85,29 +86,29 @@
           <button id="searchMemory" type="button">Search</button>
         </div>
         <pre id="memoryResults"></pre>
-      </section>
-      <section>
-        <h2>Task Graph</h2>
+      </details>
+      <details class="panel-section" open>
+        <summary>Metrics</summary>
+        <div id="metrics" class="metrics"></div>
+      </details>
+      <details class="panel-section" open>
+        <summary>Task Graph</summary>
         <div id="taskGraph" class="task-graph"></div>
-      </section>
-      <section>
-        <h2>MCP Bridge</h2>
+      </details>
+      <details class="panel-section">
+        <summary>MCP Bridge</summary>
         <input id="mcpName" placeholder="server name">
         <input id="mcpEndpoint" placeholder="http://127.0.0.1:3333">
         <input id="mcpTool" placeholder="tool name">
         <button id="registerMcp" type="button">Register MCP tool</button>
         <div id="mcpServers" class="mcp-list"></div>
-      </section>
-      <section>
-        <h2>Metrics</h2>
-        <div id="metrics" class="metrics"></div>
-      </section>
-      <section>
-        <h2>Reasoning Steps</h2>
+      </details>
+      <details class="panel-section" open>
+        <summary>Reasoning Steps</summary>
         <div id="steps" class="steps"></div>
-      </section>
-      <section>
-        <h2>Documents</h2>
+      </details>
+      <details class="panel-section">
+        <summary>Documents</summary>
         <input id="documentFile" type="file">
         <div class="button-row">
           <button id="uploadDocument" type="button">Upload</button>
@@ -115,14 +116,14 @@
           <button id="extractInvoice" type="button">Invoice</button>
         </div>
         <p id="documentStatus" class="muted">No document uploaded.</p>
-      </section>
-      <section>
-        <h2>API Discovery</h2>
+      </details>
+      <details class="panel-section">
+        <summary>API Discovery</summary>
         <input id="apiName" placeholder="name">
         <input id="apiBaseUrl" placeholder="http://127.0.0.1:5220">
         <button id="discoverApi" type="button">Discover API</button>
         <pre id="apiResult"></pre>
-      </section>
+      </details>
     </aside>
   </main>
   <script src="/app.js" type="module"></script>

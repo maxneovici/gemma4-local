@@ -24,7 +24,12 @@ async function api(path, options = {}) {
     throw new Error(await response.text());
   }
 
-  return response.json();
+  if (response.status === 204) {
+    return null;
+  }
+
+  const text = await response.text();
+  return text ? JSON.parse(text) : null;
 }
 
 async function guarded(action, label = 'working') {
@@ -127,13 +132,15 @@ async function loadApprovals() {
   $('approvals').innerHTML = recent.map(approval => `
     <div class="approval ${escapeHtml(approval.status)}">
       <strong>${escapeHtml(approval.title)}</strong>
-      <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}</span>
+      <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}${approval.scope ? ` · ${escapeHtml(approval.scope)}` : ''}</span>
       <p>${escapeHtml(approval.description)}</p>
-      ${approval.status === 'pending' ? `<div class="button-row"><button data-approve="${escapeHtml(approval.id)}" type="button">Approve</button><button data-reject="${escapeHtml(approval.id)}" type="button">Reject</button></div>` : ''}
+      ${approval.status === 'pending' ? `<div class="button-row"><button data-approve-once="${escapeHtml(approval.id)}" type="button">Allow once</button><button data-approve-session="${escapeHtml(approval.id)}" type="button">Allow session</button><button data-approve-persist="${escapeHtml(approval.id)}" type="button">Persist</button><button data-reject="${escapeHtml(approval.id)}" type="button">Reject</button></div>` : ''}
     </div>
   `).join('') || '<p class="muted">No approval requests.</p>';
 
-  document.querySelectorAll('[data-approve]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approve, true)));
+  document.querySelectorAll('[data-approve-once]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approveOnce, true, 'once')));
+  document.querySelectorAll('[data-approve-session]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approveSession, true, 'session')));
+  document.querySelectorAll('[data-approve-persist]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approvePersist, true, 'persistent')));
   document.querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.reject, false)));
 }
 
@@ -230,6 +237,18 @@ async function newSession() {
   await Promise.all([loadSessions(), loadMemoryStats()]);
   await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
+}
+
+async function deleteAllSessions() {
+  await guarded(async () => {
+    await api('/sessions', { method: 'DELETE' });
+    state.sessionId = null;
+    $('sessionTitle').textContent = 'Ready';
+    renderMessages([]);
+    renderTaskGraph(null);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs()]);
+    await newSession();
+  }, 'Deleting sessions...');
 }
 
 async function openSession(id) {
@@ -408,11 +427,11 @@ async function consolidateSession() {
   }, 'Consolidating memory...');
 }
 
-async function decideApproval(id, approve) {
+async function decideApproval(id, approve, scope = 'once') {
   await guarded(async () => {
     await api(`/approvals/${id}/${approve ? 'approve' : 'reject'}`, {
       method: 'POST',
-      body: JSON.stringify({ reason: approve ? 'Approved in local UI.' : 'Rejected in local UI.' })
+      body: JSON.stringify({ reason: approve ? `Approved in local UI (${scope}).` : 'Rejected in local UI.', scope })
     });
     await Promise.all([loadApprovals(), loadTools()]);
   }, approve ? 'Approving request...' : 'Rejecting request...');
@@ -455,6 +474,7 @@ function escapeHtml(value) {
 }
 
 $('newSession').addEventListener('click', () => guarded(newSession, 'Creating session...'));
+$('deleteSessions').addEventListener('click', deleteAllSessions);
 $('chatForm').addEventListener('submit', sendMessage);
 $('prompt').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {

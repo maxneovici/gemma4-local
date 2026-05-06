@@ -7,4 +7,6 @@ public interface IApprovalStore
     Task<ApprovalRequest?> GetAsync(string id, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ApprovalRequest>> ListAsync(CancellationToken cancellationToken);
+
+    Task DeleteAsync(string id, CancellationToken cancellationToken);
 }

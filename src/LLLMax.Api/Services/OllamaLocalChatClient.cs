@@ -90,7 +90,7 @@ public sealed class OllamaLocalChatClient(IOllamaApi ollamaApi, IOptions<LocalAi
             throw new ArgumentException("Either message or messages is required.", nameof(request));
         }
 
-        var systemPrompt = request.SystemPrompt ?? _options.SystemPrompt;
+        var systemPrompt = request.SystemPrompt ?? _options.ConversationSystemPrompt;
 
         return
         [

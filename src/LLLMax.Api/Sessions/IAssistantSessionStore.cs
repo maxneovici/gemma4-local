@@ -9,4 +9,6 @@ public interface IAssistantSessionStore
     Task<AssistantSession> GetAsync(string id, CancellationToken cancellationToken);
 
     Task SaveAsync(AssistantSession session, CancellationToken cancellationToken);
+
+    Task DeleteAllAsync(CancellationToken cancellationToken);
 }

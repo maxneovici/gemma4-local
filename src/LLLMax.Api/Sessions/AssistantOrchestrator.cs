@@ -114,7 +114,7 @@ public sealed class AssistantOrchestrator(
             yield break;
         }
 
-        await foreach (var streamEvent in StreamDirectAsync(session, request, cancellationToken))
+        await foreach (var streamEvent in StreamDirectAsync(session, request, toolDecision, cancellationToken))
         {
             yield return streamEvent;
         }
@@ -195,6 +195,7 @@ public sealed class AssistantOrchestrator(
     private async IAsyncEnumerable<SessionChatStreamEvent> StreamDirectAsync(
         AssistantSession session,
         SessionChatRequest request,
+        ToolUseDecision toolDecision,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var userMessage = new LocalChatMessage("user", request.Message);
@@ -212,7 +213,7 @@ public sealed class AssistantOrchestrator(
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
         var route = ResolveStreamRoute(agent, request, session);
-        var streamMessages = BuildStreamMessages(agent, messages);
+        var streamMessages = BuildStreamMessages(agent, messages, toolDecision);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
 
@@ -283,7 +284,7 @@ public sealed class AssistantOrchestrator(
             .. session.Messages.Where(message => message.Role != "assistant"),
             new LocalChatMessage("assistant", toolResponse.Response),
             new LocalChatMessage("user", "Stream the final user-facing answer now. Preserve the tool findings exactly, but do not mention internal protocol details.")
-        ]);
+        ], null);
 
         yield return new SessionChatStreamEvent("progress", "Tool work complete. Streaming final answer...");
 
@@ -358,9 +359,12 @@ public sealed class AssistantOrchestrator(
         return modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model ?? session.Model, request.ReasoningEffort));
     }
 
-    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages)
+    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, ToolUseDecision? toolDecision)
     {
-        var systemPrompt = $"{_options.SystemPrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
+        var basePrompt = toolDecision?.Policy.Equals(ToolUsePolicies.Direct, StringComparison.OrdinalIgnoreCase) == true
+            ? _options.ConversationSystemPrompt
+            : _options.SystemPrompt;
+        var systemPrompt = $"{basePrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
 
         return [new LocalChatMessage("system", systemPrompt), .. messages.Where(message => message.Role != "system")];
     }

@@ -21,7 +21,7 @@ public static class ApprovalEndpoints
         {
             try
             {
-                return Results.Ok(await approvals.ApproveAsync(id, request.Reason, cancellationToken));
+                return Results.Ok(await approvals.ApproveAsync(id, request.Reason, request.Scope, cancellationToken));
             }
             catch (InvalidOperationException exception)
             {

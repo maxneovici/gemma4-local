@@ -29,7 +29,7 @@ public sealed class McpLocalTool(
     {
         var arguments = JsonSerializer.Deserialize<JsonElement>(JsonSerializer.Serialize(invocation.Arguments));
         var payload = JsonSerializer.SerializeToElement(new McpToolInvocationApprovalPayload(server.Id, server.Name, tool.Name, arguments));
-        var existingApproval = await FindReusableApprovalAsync(payload, cancellationToken);
+        var existingApproval = await FindReusableApprovalAsync(payload, invocation.ConversationId, cancellationToken);
 
         if (existingApproval is null)
         {
@@ -48,18 +48,66 @@ public sealed class McpLocalTool(
             return new LocalToolResult($"MCP tool invocation was rejected. ApprovalId={existingApproval.Id}.");
         }
 
-        return new LocalToolResult(await bridge.InvokeAsync(server, tool, arguments, cancellationToken));
+        var result = await bridge.InvokeAsync(server, tool, arguments, cancellationToken);
+
+        if (existingApproval.Scope?.Equals(ApprovalScopes.Once, StringComparison.OrdinalIgnoreCase) != false)
+        {
+            await approvals.DeleteAsync(existingApproval.Id, cancellationToken);
+        }
+
+        return new LocalToolResult(result);
     }
 
-    private async Task<ApprovalRequest?> FindReusableApprovalAsync(JsonElement payload, CancellationToken cancellationToken)
+    private async Task<ApprovalRequest?> FindReusableApprovalAsync(JsonElement payload, string? conversationId, CancellationToken cancellationToken)
     {
         var approvalsList = await approvals.ListAsync(cancellationToken);
         var payloadJson = JsonSerializer.Serialize(payload);
 
         return approvalsList.FirstOrDefault(approval =>
             approval.Kind.Equals("mcp_tool_invocation", StringComparison.OrdinalIgnoreCase)
-            && JsonSerializer.Serialize(approval.Payload) == payloadJson
-            && approval.Status is "approved" or "rejected");
+            && approval.Status is "approved" or "rejected"
+            && IsApprovalMatch(approval, payloadJson, conversationId));
+    }
+
+    private bool IsApprovalMatch(ApprovalRequest approval, string payloadJson, string? conversationId)
+    {
+        if (approval.Status.Equals("rejected", StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonSerializer.Serialize(approval.Payload) == payloadJson;
+        }
+
+        var scope = approval.Scope ?? ApprovalScopes.Once;
+
+        if (scope.Equals(ApprovalScopes.Once, StringComparison.OrdinalIgnoreCase))
+        {
+            return JsonSerializer.Serialize(approval.Payload) == payloadJson;
+        }
+
+        if (scope.Equals(ApprovalScopes.Session, StringComparison.OrdinalIgnoreCase)
+            && !string.Equals(approval.ConversationId, conversationId, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return TryReadPayload(approval.Payload, out var serverId, out var toolName)
+            && serverId.Equals(server.Id, StringComparison.OrdinalIgnoreCase)
+            && toolName.Equals(tool.Name, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool TryReadPayload(JsonElement payload, out string serverId, out string toolName)
+    {
+        serverId = string.Empty;
+        toolName = string.Empty;
+
+        if (!payload.TryGetProperty("serverId", out var serverProperty)
+            || !payload.TryGetProperty("toolName", out var toolProperty))
+        {
+            return false;
+        }
+
+        serverId = serverProperty.GetString() ?? string.Empty;
+        toolName = toolProperty.GetString() ?? string.Empty;
+        return serverId.Length > 0 && toolName.Length > 0;
     }
 
     private static string Sanitize(string value) =>
