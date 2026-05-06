@@ -60,7 +60,7 @@ public sealed class AgentRuntime(
                     Messages: messages,
                     Tools: allowedTools,
                     EnableThinking: route.EnableThinking,
-                    Temperature: route.Temperature), cancellationToken);
+                    Temperature: request.Temperature ?? route.Temperature), cancellationToken);
 
                 response = new LocalChatResponse(
                     Model: nativeResponse.Model,
@@ -83,7 +83,7 @@ public sealed class AgentRuntime(
                     Model: route.Model,
                     Messages: messages,
                     EnableThinking: route.EnableThinking,
-                    Temperature: route.Temperature), cancellationToken);
+                    Temperature: request.Temperature ?? route.Temperature), cancellationToken);
             }
 
             reasoningSteps.Add(new ReasoningStep("model", response.Response, DateTimeOffset.UtcNow));

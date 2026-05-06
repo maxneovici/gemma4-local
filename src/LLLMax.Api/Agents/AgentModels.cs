@@ -18,6 +18,7 @@ public sealed record AgentRunRequest(
     string? ConversationId = null,
     string? Model = null,
     string? ReasoningEffort = null,
+    double? Temperature = null,
     int? MaxToolIterations = null,
     IReadOnlyList<LocalChatMessage>? Messages = null,
     int DelegationDepth = 0,

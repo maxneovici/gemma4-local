@@ -125,6 +125,12 @@ public sealed class LocalAiOrchestrationOptions
 
 public sealed class LocalAiModelRouterOptions
 {
+    public bool UseAiPlanner { get; init; } = true;
+
+    public string? RouterModel { get; init; }
+
+    public string RouterSystemPrompt { get; init; } = "You are the LLLMax routing planner. You infer user intent and choose local execution parameters. You do not answer the user. You return strict JSON only.";
+
     public string? InteractiveModel { get; init; }
 
     public string? BalancedModel { get; init; }

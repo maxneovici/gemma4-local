@@ -19,7 +19,8 @@ public sealed record SessionChatResponse(
     IReadOnlyList<LocalChatMessage> Messages,
     AgentRunMetrics? Metrics,
     IReadOnlyList<ReasoningStep> ReasoningSteps,
-    bool Summarized);
+    bool Summarized,
+    ToolUseDecision? Route = null);
 
 public sealed record SessionChatStreamEvent(
     string Type,

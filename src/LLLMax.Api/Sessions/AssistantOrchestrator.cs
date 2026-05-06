@@ -40,15 +40,16 @@ public sealed class AssistantOrchestrator(
         }
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var toolDecision = DecideToolUse(request, agent, messages);
+        var toolDecision = await DecideToolUseAsync(request, agent, messages, cancellationToken);
         var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
             Agent: request.Agent ?? session.Agent,
             Message: request.Message,
-            AllowTools: toolDecision.ShouldRunTools,
+            AllowTools: request.AllowTools,
             PersistToMemory: request.PersistToMemory,
             ConversationId: session.Id,
-            Model: request.Model ?? session.Model,
-            ReasoningEffort: request.ReasoningEffort,
+            Model: request.Model ?? toolDecision.Model ?? session.Model,
+            ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
+            Temperature: toolDecision.Temperature,
             Messages: messages,
             DelegationDepth: 0,
             OnEvent: async (runtimeEvent, token) =>
@@ -80,7 +81,8 @@ public sealed class AssistantOrchestrator(
             Messages: nextMessages,
             Metrics: agentResponse.Metrics,
             ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
-            Summarized: summarized);
+            Summarized: summarized,
+            Route: toolDecision);
     }
 
     public async IAsyncEnumerable<SessionChatStreamEvent> StreamChatAsync(
@@ -92,10 +94,10 @@ public sealed class AssistantOrchestrator(
         var graph = await taskGraphs.RecordRunStartedAsync(sessionId, request.Message, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var toolDecision = DecideToolUse(request, agent, session.Messages.Concat([new LocalChatMessage("user", request.Message)]).ToList());
-        yield return new SessionChatStreamEvent("progress", $"Tool policy: {toolDecision.Policy}. {toolDecision.Reason}", Payload: toolDecision);
+        var toolDecision = await DecideToolUseAsync(request, agent, session.Messages.Concat([new LocalChatMessage("user", request.Message)]).ToList(), cancellationToken);
+        yield return new SessionChatStreamEvent("progress", $"Route: {toolDecision.Policy}. {toolDecision.Reason}", Payload: toolDecision);
 
-        if (toolDecision.ShouldRunTools)
+        if (toolDecision.ShouldUseOrchestrator)
         {
             var toolResponse = StreamToolRunAsync(session, request, toolDecision, cancellationToken);
 
@@ -136,11 +138,12 @@ public sealed class AssistantOrchestrator(
                 var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
                     Agent: request.Agent ?? session.Agent,
                     Message: request.Message,
-                    AllowTools: toolDecision.ShouldRunTools,
+                    AllowTools: request.AllowTools,
                     PersistToMemory: request.PersistToMemory,
                     ConversationId: session.Id,
-                    Model: request.Model ?? session.Model,
-                    ReasoningEffort: request.ReasoningEffort,
+                    Model: request.Model ?? toolDecision.Model ?? session.Model,
+                    ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
+                    Temperature: toolDecision.Temperature,
                     Messages: messages,
                     DelegationDepth: 0,
                     OnEvent: async (runtimeEvent, token) =>
@@ -181,7 +184,8 @@ public sealed class AssistantOrchestrator(
                     Messages: nextMessages,
                     Metrics: agentResponse.Metrics,
                     ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
-                    Summarized: false);
+                    Summarized: false,
+                    Route: toolDecision);
             }
             finally
             {
@@ -212,7 +216,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var route = ResolveStreamRoute(agent, request, session);
+        var route = ResolveStreamRoute(agent, request, session, toolDecision);
         var streamMessages = BuildStreamMessages(agent, messages, toolDecision);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
@@ -247,8 +251,9 @@ public sealed class AssistantOrchestrator(
             Response: response,
             Messages: nextMessages,
             Metrics: metrics,
-            ReasoningSteps: WithToolDecision(DecideToolUse(request, agent, messages), [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]),
-            Summarized: summarized);
+            ReasoningSteps: WithToolDecision(toolDecision, [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]),
+            Summarized: summarized,
+            Route: toolDecision);
 
         await sessions.SaveAsync(session with
         {
@@ -276,7 +281,7 @@ public sealed class AssistantOrchestrator(
 
         var session = await sessions.GetAsync(sessionId, cancellationToken);
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var route = ResolveStreamRoute(agent, request, session);
+        var route = ResolveStreamRoute(agent, request, session, toolResponse.Route);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
         var messages = BuildStreamMessages(agent,
@@ -334,11 +339,11 @@ public sealed class AssistantOrchestrator(
         return ContextEstimator.EstimateTokens(messages) >= triggerTokens;
     }
 
-    private ToolUseDecision DecideToolUse(SessionChatRequest request, AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages) =>
-        toolUsePlanner.Decide(new ToolUsePlanningRequest(request.Message, agent, request.AllowTools, messages));
+    private async Task<ToolUseDecision> DecideToolUseAsync(SessionChatRequest request, AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken) =>
+        await toolUsePlanner.DecideAsync(new ToolUsePlanningRequest(request.Message, agent, request.AllowTools, messages), cancellationToken);
 
     private static IReadOnlyList<ReasoningStep> WithToolDecision(ToolUseDecision decision, IReadOnlyList<ReasoningStep> steps) =>
-        [new ReasoningStep("tool_policy", $"{decision.Policy}: {decision.Reason} Suggested={string.Join(", ", decision.SuggestedTools)}", DateTimeOffset.UtcNow), .. steps];
+        [new ReasoningStep("route", $"intent={decision.Intent}; mode={decision.ResponseMode}; policy={decision.Policy}; model={decision.Model}; reasoning={decision.ReasoningEffort}; temperature={decision.Temperature:0.00}; confidence={decision.Confidence:0.00}; tools={string.Join(", ", decision.SuggestedTools)}; reason={decision.Reason}", DateTimeOffset.UtcNow), .. steps];
 
     private async Task<string> SummarizeAsync(AssistantSession session, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken)
     {
@@ -354,9 +359,15 @@ public sealed class AssistantOrchestrator(
         return response.Response;
     }
 
-    private ModelRoute ResolveStreamRoute(AgentDefinition agent, SessionChatRequest request, AssistantSession session)
+    private ModelRoute ResolveStreamRoute(AgentDefinition agent, SessionChatRequest request, AssistantSession session, ToolUseDecision? decision)
     {
-        return modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model ?? session.Model, request.ReasoningEffort));
+        var route = modelRouter.Resolve(new ModelRouteRequest(
+            agent,
+            request.Message,
+            request.Model ?? decision?.Model ?? session.Model,
+            request.ReasoningEffort ?? decision?.ReasoningEffort));
+
+        return decision is null ? route : route with { Temperature = decision.Temperature };
     }
 
     private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, ToolUseDecision? toolDecision)
