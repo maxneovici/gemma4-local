@@ -24,13 +24,26 @@ public sealed class AgentRuntime(
         var agent = agentRegistry.GetRequiredAgent(request.Agent);
         var toolResults = new List<ToolExecutionResult>();
         var reasoningSteps = new List<ReasoningStep>();
+        var delegationDepth = Math.Max(0, request.DelegationDepth);
+
+        if (delegationDepth > _options.Orchestration.MaxDelegationDepth)
+        {
+            return new AgentRunResponse(
+                Agent: agent.Name,
+                Response: $"Delegation stopped because max depth {_options.Orchestration.MaxDelegationDepth} was reached.",
+                ToolResults: [],
+                ReasoningSteps: [new ReasoningStep("loop_guard", "Max delegation depth reached.", DateTimeOffset.UtcNow)],
+                TaskComplete: false,
+                SessionId: request.ConversationId);
+        }
+
         var memoryContext = await BuildMemoryContextAsync(agent, request.Message, cancellationToken);
         var toolContext = BuildToolContext(agent, request.AllowTools);
         var route = modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model, request.ReasoningEffort));
         var prompt = BuildSystemPrompt(agent, memoryContext, toolContext);
         var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
-        reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}", DateTimeOffset.UtcNow));
+        reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}; delegationDepth={delegationDepth}", DateTimeOffset.UtcNow));
 
         var messages = BuildInitialMessages(request, prompt);
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
@@ -94,15 +107,26 @@ public sealed class AgentRuntime(
             var tool = toolRegistry.GetRequiredTool(toolCall.Tool);
             EnsureToolAllowed(agent, tool.Name);
             reasoningSteps.Add(new ReasoningStep("tool_call", $"{tool.Name}: {string.Join(", ", toolCall.Arguments.Keys)}", DateTimeOffset.UtcNow));
+            await PublishAsync(request, new AgentRuntimeEvent(
+                Kind: "tool_started",
+                Content: $"Calling {tool.Name}...",
+                Tool: tool.Name,
+                Arguments: toolCall.Arguments.ToDictionary(pair => pair.Key, pair => pair.Value.ToString())), cancellationToken);
 
             var result = await tool.InvokeAsync(new LocalToolInvocation(
                 ToolName: tool.Name,
                 Arguments: toolCall.Arguments,
                 Agent: agent,
-                ConversationId: request.ConversationId), cancellationToken);
+                ConversationId: request.ConversationId,
+                DelegationDepth: delegationDepth), cancellationToken);
 
             toolResults.Add(new ToolExecutionResult(tool.Name, result.Content));
             reasoningSteps.Add(new ReasoningStep("tool_result", result.Content, DateTimeOffset.UtcNow));
+            await PublishAsync(request, new AgentRuntimeEvent(
+                Kind: "tool_completed",
+                Content: $"{tool.Name} completed.",
+                Tool: tool.Name,
+                Result: result.Content), cancellationToken);
             messages = AppendToolResult(messages, response.Response, tool.Name, result.Content);
         }
 
@@ -127,6 +151,9 @@ public sealed class AgentRuntime(
             TaskComplete: true,
             SessionId: request.ConversationId);
     }
+
+    private static Task PublishAsync(AgentRunRequest request, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
+        request.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
 
     private string BuildSystemPrompt(AgentDefinition agent, string memoryContext, string toolContext)
     {
@@ -158,6 +185,11 @@ Completion protocol:
 - Decide whether the user task is complete.
 - If complete, provide the final answer directly.
 - If blocked, state the blocker and the smallest next action.
+
+Loop guardrails:
+- Maximum tool iterations for this run: {_options.Orchestration.MaxToolIterations}.
+- Maximum delegation depth: {_options.Orchestration.MaxDelegationDepth}.
+- Do not delegate if you can answer directly with available context.
 """;
     }
 

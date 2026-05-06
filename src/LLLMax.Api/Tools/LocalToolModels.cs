@@ -7,6 +7,7 @@ public sealed record LocalToolInvocation(
     string ToolName,
     IReadOnlyDictionary<string, JsonElement> Arguments,
     AgentDefinition Agent,
-    string? ConversationId);
+    string? ConversationId,
+    int DelegationDepth);
 
 public sealed record LocalToolResult(string Content);

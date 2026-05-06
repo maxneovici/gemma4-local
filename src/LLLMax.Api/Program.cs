@@ -7,6 +7,7 @@ using LLLMax.Api.Integrations;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Services;
 using LLLMax.Api.Sessions;
+using LLLMax.Api.Tasks;
 using LLLMax.Api.Tools;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -77,6 +78,9 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, ApiIntegrationRegistry>();
 builder.Services.AddSingleton<IAssistantSessionStore, FileAssistantSessionStore>();
+builder.Services.AddSingleton<ITaskGraphStore, FileTaskGraphStore>();
+builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
+builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();
 builder.Services.AddHostedService<LocalModelSetupHostedService>();
@@ -97,6 +101,7 @@ app.MapLocalAiEndpoints();
 app.MapAgentEndpoints();
 app.MapMemoryEndpoints();
 app.MapSessionEndpoints();
+app.MapTaskGraphEndpoints();
 app.MapDocumentEndpoints();
 app.MapIntegrationEndpoints();
 

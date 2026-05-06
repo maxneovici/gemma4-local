@@ -4,7 +4,9 @@ const state = {
   models: [],
   sessions: [],
   tools: [],
-  agents: []
+  agents: [],
+  taskGraph: null,
+  consolidationJobs: []
 };
 
 const $ = id => document.getElementById(id);
@@ -25,6 +27,7 @@ async function api(path, options = {}) {
 
 async function guarded(action, label = 'working') {
   setStatus(label, 'busy');
+  setWorking(true, label);
   try {
     const result = await action();
     setStatus('Ready', 'ok');
@@ -32,12 +35,19 @@ async function guarded(action, label = 'working') {
   } catch (error) {
     setStatus(error.message, 'error');
     throw error;
+  } finally {
+    setWorking(false);
   }
 }
 
 function setStatus(text, kind = 'ok') {
   $('statusLine').textContent = text;
   $('statusLine').dataset.kind = kind;
+}
+
+function setWorking(isWorking, label = '') {
+  $('workOverlay').hidden = !isWorking;
+  $('workLabel').textContent = label;
 }
 
 function renderMessages(messages) {
@@ -130,12 +140,57 @@ async function loadMemoryStats() {
   `;
 }
 
+async function loadConsolidationJobs() {
+  state.consolidationJobs = await api('/memory/consolidation/jobs');
+  $('consolidationJobs').innerHTML = state.consolidationJobs.slice(0, 3).map(job => `
+    <div class="job ${escapeHtml(job.status)}"><strong>${escapeHtml(job.status)}</strong><span>${escapeHtml(job.sessionId.slice(0, 8))} · ${escapeHtml(String(job.memoriesWritten))} memories</span></div>
+  `).join('') || '<p class="muted">No consolidation jobs yet.</p>';
+}
+
+async function loadTaskGraph() {
+  if (!state.sessionId) {
+    renderTaskGraph(null);
+    return;
+  }
+
+  const response = await fetch(`/task-graphs/sessions/${state.sessionId}`);
+  state.taskGraph = response.ok ? await response.json() : null;
+  renderTaskGraph(state.taskGraph);
+}
+
+function renderTaskGraph(graph) {
+  if (!graph) {
+    $('taskGraph').innerHTML = '<p class="muted">No task graph for this session yet.</p>';
+    return;
+  }
+
+  const active = graph.nodes?.find(node => node.id === graph.activeNodeId);
+  $('taskGraph').innerHTML = `
+    <div class="graph-head"><strong>${escapeHtml(graph.status)}</strong><span>${escapeHtml(Math.round((graph.confidence ?? 0) * 100))}% confidence</span></div>
+    <p>${escapeHtml(graph.goal)}</p>
+    <div class="active-node">active: ${escapeHtml(active?.title ?? 'none')}</div>
+    <div class="node-list">
+      ${(graph.nodes ?? []).map(node => `
+        <div class="node ${escapeHtml(node.status)}">
+          <strong>${escapeHtml(node.title)}</strong>
+          <span>${escapeHtml(node.status)} · ${escapeHtml(Math.round((node.confidence ?? 0) * 100))}%</span>
+          ${node.blocker ? `<em>${escapeHtml(node.blocker)}</em>` : ''}
+        </div>
+      `).join('')}
+    </div>
+    <div class="artifact-list">
+      ${(graph.artifacts ?? []).slice(-4).map(artifact => `<span>${escapeHtml(artifact.kind)}: ${escapeHtml(artifact.title)}</span>`).join('')}
+    </div>
+  `;
+}
+
 async function newSession() {
   const session = await api('/sessions', { method: 'POST', body: JSON.stringify({ title: 'LLLMax session', model: $('modelSelect').value || null }) });
   state.sessionId = session.id;
   $('sessionTitle').textContent = session.title;
   renderMessages(session.messages ?? []);
   await Promise.all([loadSessions(), loadMemoryStats()]);
+  await Promise.all([loadTaskGraph(), loadConsolidationJobs()]);
   renderRuntime(await api('/health'));
 }
 
@@ -145,7 +200,7 @@ async function openSession(id) {
   $('sessionTitle').textContent = session.title;
   $('modelSelect').value = session.model ?? '';
   renderMessages(session.messages ?? []);
-  await loadSessions();
+  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs()]);
   renderRuntime(await api('/health'));
 }
 
@@ -158,10 +213,11 @@ async function sendMessage(event) {
     if (!state.sessionId) await newSession();
     $('prompt').value = '';
     $('sendButton').disabled = true;
-    renderMessages([...documentMessages(), { role: 'user', content: message }]);
+    renderMessages([...documentMessages(), { role: 'user', content: message }, { role: 'assistant', content: '' }]);
 
-    const result = await api(`/sessions/${state.sessionId}/chat`, {
+    const result = await streamChat(`/sessions/${state.sessionId}/chat/stream`, {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
         model: $('modelSelect').value || null,
@@ -174,8 +230,80 @@ async function sendMessage(event) {
     renderMessages(result.messages);
     renderMetrics(result.metrics);
     renderSteps(result.reasoningSteps);
-    await Promise.all([loadSessions(), loadMemoryStats()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs()]);
   }, 'Thinking...').finally(() => $('sendButton').disabled = false);
+}
+
+async function streamChat(path, options) {
+  const response = await fetch(path, options);
+
+  if (!response.ok || !response.body) {
+    throw new Error(await response.text());
+  }
+
+  const decoder = new TextDecoder();
+  const reader = response.body.getReader();
+  let buffer = '';
+  let finalResult = null;
+
+  while (true) {
+    const { value, done } = await reader.read();
+
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      const event = parseServerEvent(part);
+      if (!event) continue;
+
+      if (event.type === 'chunk' && event.content) {
+        appendAssistantChunk(event.content);
+      }
+
+      if (event.type === 'progress' && event.content) {
+        setStatus(event.content, 'busy');
+        setWorking(true, event.content);
+      }
+
+      if (event.type === 'task_graph' && event.payload) {
+        state.taskGraph = event.payload;
+        renderTaskGraph(state.taskGraph);
+      }
+
+      if (event.type === 'final') {
+        finalResult = event.result;
+      }
+
+      if (event.type === 'error') {
+        throw new Error(event.content ?? 'Streaming chat failed.');
+      }
+    }
+  }
+
+  if (!finalResult) {
+    throw new Error('Streaming chat ended without a final response.');
+  }
+
+  return finalResult;
+}
+
+function parseServerEvent(raw) {
+  const dataLine = raw.split('\n').find(line => line.startsWith('data: '));
+  return dataLine ? JSON.parse(dataLine.slice(6)) : null;
+}
+
+function appendAssistantChunk(content) {
+  const messages = $('messages');
+  const assistantMessages = messages.querySelectorAll('.message.assistant');
+  const target = assistantMessages[assistantMessages.length - 1];
+
+  if (!target) return;
+
+  target.textContent += content;
+  messages.scrollTop = messages.scrollHeight;
 }
 
 function documentMessages() {
@@ -231,6 +359,17 @@ async function searchMemory() {
   }, 'Searching memory...');
 }
 
+async function consolidateSession() {
+  await guarded(async () => {
+    if (!state.sessionId) throw new Error('Open a session first.');
+    await api('/memory/consolidation', {
+      method: 'POST',
+      body: JSON.stringify({ sessionId: state.sessionId })
+    });
+    await Promise.all([loadMemoryStats(), loadConsolidationJobs()]);
+  }, 'Consolidating memory...');
+}
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -242,12 +381,19 @@ function escapeHtml(value) {
 
 $('newSession').addEventListener('click', () => guarded(newSession, 'Creating session...'));
 $('chatForm').addEventListener('submit', sendMessage);
+$('prompt').addEventListener('keydown', event => {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    $('chatForm').requestSubmit();
+  }
+});
 $('effort').addEventListener('input', event => $('effortLabel').textContent = effortMap[event.target.value]);
 $('uploadDocument').addEventListener('click', uploadDocument);
 $('runOcr').addEventListener('click', () => runDocumentAction('/documents/ocr'));
 $('extractInvoice').addEventListener('click', () => runDocumentAction('/documents/extract-invoice'));
 $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
+$('consolidateSession').addEventListener('click', consolidateSession);
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
@@ -257,7 +403,7 @@ renderMetrics(null);
 renderSteps([]);
 
 await guarded(async () => {
-  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats()]);
+  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs()]);
   renderRuntime(await api('/health'));
 
   if (state.sessions[0]) {

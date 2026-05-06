@@ -35,6 +35,21 @@ public static class MemoryEndpoints
         group.MapGet("/stats", async (ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.GetStatsAsync(cancellationToken)));
 
+        group.MapGet("/consolidation/jobs", async (IMemoryConsolidationService consolidation, CancellationToken cancellationToken) =>
+            Results.Ok(await consolidation.ListJobsAsync(cancellationToken)));
+
+        group.MapPost("/consolidation", async (MemoryConsolidationRequest request, IMemoryConsolidationService consolidation, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return Results.Ok(await consolidation.ConsolidateSessionAsync(request, cancellationToken));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.NotFound(new { Error = exception.Message });
+            }
+        });
+
         return app;
     }
 }

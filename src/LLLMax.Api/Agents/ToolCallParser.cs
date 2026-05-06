@@ -20,7 +20,7 @@ public static class ToolCallParser
             using var document = JsonDocument.Parse(trimmed);
             var root = document.RootElement;
 
-            if (!root.TryGetProperty("tool", out var toolElement) || toolElement.GetString() is not { Length: > 0 } tool)
+            if (!TryGetToolName(root, out var tool))
             {
                 return false;
             }
@@ -36,6 +36,24 @@ public static class ToolCallParser
         {
             return false;
         }
+    }
+
+    private static bool TryGetToolName(JsonElement root, out string tool)
+    {
+        if (root.TryGetProperty("tool", out var toolElement) && toolElement.GetString() is { Length: > 0 } parsedTool)
+        {
+            tool = parsedTool;
+            return true;
+        }
+
+        if (root.TryGetProperty("tool_name", out var toolNameElement) && toolNameElement.GetString() is { Length: > 0 } parsedToolName)
+        {
+            tool = parsedToolName;
+            return true;
+        }
+
+        tool = string.Empty;
+        return false;
     }
 
     private static string? ExtractJsonObject(string text)

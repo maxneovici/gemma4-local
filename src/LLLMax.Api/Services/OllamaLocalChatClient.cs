@@ -36,6 +36,36 @@ public sealed class OllamaLocalChatClient(IOllamaApi ollamaApi, IOptions<LocalAi
             TokensPerSecond: TokensPerSecond(response.EvalCount, response.TotalDuration));
     }
 
+    public async IAsyncEnumerable<LocalChatStreamChunk> StreamChatAsync(LocalChatRequest request, [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        var model = string.IsNullOrWhiteSpace(request.Model)
+            ? _options.DefaultModel
+            : request.Model;
+
+        var messages = BuildMessages(request);
+        var ollamaRequest = new OllamaStreamChatRequest(
+            Model: model,
+            Stream: true,
+            Messages: messages.Select(message => new OllamaMessage(message.Role, message.Content)).ToList(),
+            Options: new OllamaOptions(
+                Temperature: request.Temperature ?? _options.Sampling.Temperature,
+                TopP: request.TopP ?? _options.Sampling.TopP,
+                TopK: request.TopK ?? _options.Sampling.TopK),
+            Think: request.EnableThinking ? true : null);
+
+        await foreach (var chunk in ollamaApi.StreamChatAsync(ollamaRequest, cancellationToken))
+        {
+            yield return new LocalChatStreamChunk(
+                Model: chunk.Model ?? model,
+                Content: chunk.Message?.Content ?? string.Empty,
+                Done: chunk.Done,
+                TotalDurationMs: DurationToMilliseconds(chunk.TotalDuration),
+                PromptEvalCount: chunk.PromptEvalCount,
+                EvalCount: chunk.EvalCount,
+                TokensPerSecond: TokensPerSecond(chunk.EvalCount, chunk.TotalDuration));
+        }
+    }
+
     public async Task<IReadOnlyList<LocalModelResponse>> GetModelsAsync(CancellationToken cancellationToken)
     {
         var models = await ollamaApi.GetModelsAsync(cancellationToken);

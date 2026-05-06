@@ -1,4 +1,6 @@
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
+using System.Text.Json;
 using LLLMax.Api.Models;
 
 namespace LLLMax.Api.Services;
@@ -59,7 +61,11 @@ public sealed class OllamaApi(IHttpClientFactory httpClientFactory, LocalEndpoin
     {
         endpointGuard.ThrowIfRemoteEndpoint();
 
-        var response = await httpClientFactory.CreateClient("ollama").PostAsJsonAsync("/api/chat", request, cancellationToken);
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        {
+            Content = JsonContent.Create(request)
+        };
+        var response = await httpClientFactory.CreateClient("ollama").SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {
@@ -69,6 +75,38 @@ public sealed class OllamaApi(IHttpClientFactory httpClientFactory, LocalEndpoin
 
         return await response.Content.ReadFromJsonAsync<OllamaChatResponse>(cancellationToken)
             ?? throw new InvalidOperationException("Ollama returned an empty chat response.");
+    }
+
+    public async IAsyncEnumerable<OllamaChatStreamResponse> StreamChatAsync(
+        OllamaStreamChatRequest request,
+        [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        endpointGuard.ThrowIfRemoteEndpoint();
+
+        var response = await httpClientFactory.CreateClient("ollama").PostAsJsonAsync("/api/chat", request, cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var error = await response.Content.ReadAsStringAsync(cancellationToken);
+            throw new InvalidOperationException($"Ollama stream returned {(int)response.StatusCode}: {error}");
+        }
+
+        await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+        using var reader = new StreamReader(stream);
+
+        while (!reader.EndOfStream)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var line = await reader.ReadLineAsync(cancellationToken);
+
+            if (string.IsNullOrWhiteSpace(line))
+            {
+                continue;
+            }
+
+            yield return JsonSerializer.Deserialize<OllamaChatStreamResponse>(line)
+                ?? throw new InvalidOperationException("Ollama returned an empty stream chunk.");
+        }
     }
 
     public async Task<OllamaChatResponse> ChatWithToolsAsync(OllamaNativeToolChatRequest request, CancellationToken cancellationToken)

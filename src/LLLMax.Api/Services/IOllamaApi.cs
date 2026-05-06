@@ -14,6 +14,8 @@ public interface IOllamaApi
 
     Task<OllamaChatResponse> ChatAsync(OllamaChatRequest request, CancellationToken cancellationToken);
 
+    IAsyncEnumerable<OllamaChatStreamResponse> StreamChatAsync(OllamaStreamChatRequest request, CancellationToken cancellationToken);
+
     Task<OllamaChatResponse> ChatWithToolsAsync(OllamaNativeToolChatRequest request, CancellationToken cancellationToken);
 
     Task<OllamaChatResponse> ChatVisionAsync(OllamaVisionChatRequest request, CancellationToken cancellationToken);

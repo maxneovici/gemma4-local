@@ -1,9 +1,16 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using LLLMax.Api.Sessions;
 
 namespace LLLMax.Api.Endpoints;
 
 public static class SessionEndpoints
 {
+    private static readonly JsonSerializerOptions SseJsonOptions = new(JsonSerializerDefaults.Web)
+    {
+        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+    };
+
     public static IEndpointRouteBuilder MapSessionEndpoints(this IEndpointRouteBuilder app)
     {
         var group = app.MapGroup("/sessions");
@@ -39,6 +46,30 @@ public static class SessionEndpoints
             catch (InvalidOperationException exception)
             {
                 return Results.Problem(exception.Message);
+            }
+        });
+
+        group.MapPost("/{id}/chat/stream", async (string id, SessionChatRequest request, IAssistantOrchestrator orchestrator, HttpContext context, CancellationToken cancellationToken) =>
+        {
+            context.Response.Headers.CacheControl = "no-cache";
+            context.Response.Headers.Connection = "keep-alive";
+            context.Response.ContentType = "text/event-stream";
+
+            try
+            {
+                await foreach (var streamEvent in orchestrator.StreamChatAsync(id, request, cancellationToken))
+                {
+                    await context.Response.WriteAsync($"event: {streamEvent.Type}\n", cancellationToken);
+                    await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(streamEvent, SseJsonOptions)}\n\n", cancellationToken);
+                    await context.Response.Body.FlushAsync(cancellationToken);
+                }
+            }
+            catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
+            {
+                var error = JsonSerializer.Serialize(new SessionChatStreamEvent("error", exception.Message), SseJsonOptions);
+                await context.Response.WriteAsync("event: error\n", cancellationToken);
+                await context.Response.WriteAsync($"data: {error}\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
             }
         });
 

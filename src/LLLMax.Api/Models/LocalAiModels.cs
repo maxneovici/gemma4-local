@@ -23,6 +23,15 @@ public sealed record LocalChatResponse(
     int? EvalCount,
     double? TokensPerSecond = null);
 
+public sealed record LocalChatStreamChunk(
+    string Model,
+    string Content,
+    bool Done,
+    double? TotalDurationMs = null,
+    int? PromptEvalCount = null,
+    int? EvalCount = null,
+    double? TokensPerSecond = null);
+
 public sealed record HealthResponse(bool IsHealthy, string Message);
 
 public sealed record ErrorResponse(string Error);
@@ -36,6 +45,13 @@ public sealed record OllamaChatRequest(
     [property: JsonPropertyName("options")] OllamaOptions Options,
     [property: JsonPropertyName("think")] bool? Think = null,
     [property: JsonPropertyName("tools")] IReadOnlyList<OllamaToolDefinition>? Tools = null);
+
+public sealed record OllamaStreamChatRequest(
+    [property: JsonPropertyName("model")] string Model,
+    [property: JsonPropertyName("stream")] bool Stream,
+    [property: JsonPropertyName("messages")] IReadOnlyList<OllamaMessage> Messages,
+    [property: JsonPropertyName("options")] OllamaOptions Options,
+    [property: JsonPropertyName("think")] bool? Think = null);
 
 public sealed record OllamaNativeToolChatRequest(
     [property: JsonPropertyName("model")] string Model,
@@ -94,6 +110,14 @@ public sealed record OllamaOptions(
 public sealed record OllamaChatResponse(
     [property: JsonPropertyName("model")] string Model,
     [property: JsonPropertyName("message")] OllamaNativeMessage? Message,
+    [property: JsonPropertyName("total_duration")] long? TotalDuration,
+    [property: JsonPropertyName("prompt_eval_count")] int? PromptEvalCount,
+    [property: JsonPropertyName("eval_count")] int? EvalCount);
+
+public sealed record OllamaChatStreamResponse(
+    [property: JsonPropertyName("model")] string? Model,
+    [property: JsonPropertyName("message")] OllamaNativeMessage? Message,
+    [property: JsonPropertyName("done")] bool Done,
     [property: JsonPropertyName("total_duration")] long? TotalDuration,
     [property: JsonPropertyName("prompt_eval_count")] int? PromptEvalCount,
     [property: JsonPropertyName("eval_count")] int? EvalCount);

@@ -6,5 +6,7 @@ public interface ILocalChatClient
 {
     Task<LocalChatResponse> ChatAsync(LocalChatRequest request, CancellationToken cancellationToken);
 
+    IAsyncEnumerable<LocalChatStreamChunk> StreamChatAsync(LocalChatRequest request, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<LocalModelResponse>> GetModelsAsync(CancellationToken cancellationToken);
 }

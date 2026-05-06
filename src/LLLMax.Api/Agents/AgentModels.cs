@@ -19,7 +19,9 @@ public sealed record AgentRunRequest(
     string? Model = null,
     string? ReasoningEffort = null,
     int? MaxToolIterations = null,
-    IReadOnlyList<LocalChatMessage>? Messages = null);
+    IReadOnlyList<LocalChatMessage>? Messages = null,
+    int DelegationDepth = 0,
+    Func<AgentRuntimeEvent, CancellationToken, Task>? OnEvent = null);
 
 public sealed record AgentRunResponse(
     string Agent,
@@ -42,6 +44,13 @@ public sealed record AgentRunMetrics(
     int? EvalCount,
     double? TokensPerSecond,
     int EstimatedContextTokens);
+
+public sealed record AgentRuntimeEvent(
+    string Kind,
+    string Content,
+    string? Tool = null,
+    IReadOnlyDictionary<string, string>? Arguments = null,
+    string? Result = null);
 
 public sealed record AgentDelegationRequest(string Agent, string Message);
 

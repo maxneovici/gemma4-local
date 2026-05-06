@@ -110,7 +110,9 @@ public sealed class LocalAiOrchestrationOptions
 
     public int MaxToolIterations { get; init; } = 6;
 
-    public int ContextMaxEstimatedTokens { get; init; } = 24000;
+    public int MaxDelegationDepth { get; init; } = 3;
+
+    public int ContextMaxEstimatedTokens { get; init; } = 200000;
 
     public int ContextSummaryTriggerPercent { get; init; } = 80;
 

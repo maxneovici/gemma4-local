@@ -21,6 +21,12 @@ public sealed record SessionChatResponse(
     IReadOnlyList<ReasoningStep> ReasoningSteps,
     bool Summarized);
 
+public sealed record SessionChatStreamEvent(
+    string Type,
+    string? Content = null,
+    SessionChatResponse? Result = null,
+    object? Payload = null);
+
 public sealed record AssistantSession(
     string Id,
     string Title,
