@@ -17,6 +17,7 @@ public sealed class AssistantOrchestrator(
     ITaskGraphService taskGraphs,
     IAgentRegistry agentRegistry,
     IModelRouter modelRouter,
+    IToolUsePlanner toolUsePlanner,
     IOptions<LocalAiOptions> options) : IAssistantOrchestrator
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -38,10 +39,12 @@ public sealed class AssistantOrchestrator(
             summarized = true;
         }
 
+        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
+        var toolDecision = DecideToolUse(request, agent, messages);
         var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
             Agent: request.Agent ?? session.Agent,
             Message: request.Message,
-            AllowTools: request.AllowTools,
+            AllowTools: toolDecision.ShouldRunTools,
             PersistToMemory: request.PersistToMemory,
             ConversationId: session.Id,
             Model: request.Model ?? session.Model,
@@ -76,7 +79,7 @@ public sealed class AssistantOrchestrator(
             Response: agentResponse.Response,
             Messages: nextMessages,
             Metrics: agentResponse.Metrics,
-            ReasoningSteps: agentResponse.ReasoningSteps ?? [],
+            ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
             Summarized: summarized);
     }
 
@@ -88,10 +91,13 @@ public sealed class AssistantOrchestrator(
         var session = await sessions.GetAsync(sessionId, cancellationToken);
         var graph = await taskGraphs.RecordRunStartedAsync(sessionId, request.Message, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
+        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
+        var toolDecision = DecideToolUse(request, agent, session.Messages.Concat([new LocalChatMessage("user", request.Message)]).ToList());
+        yield return new SessionChatStreamEvent("progress", $"Tool policy: {toolDecision.Policy}. {toolDecision.Reason}", Payload: toolDecision);
 
-        if (request.AllowTools)
+        if (toolDecision.ShouldRunTools)
         {
-            var toolResponse = StreamToolRunAsync(session, request, cancellationToken);
+            var toolResponse = StreamToolRunAsync(session, request, toolDecision, cancellationToken);
 
             await foreach (var streamEvent in toolResponse.Events.WithCancellation(cancellationToken))
             {
@@ -117,6 +123,7 @@ public sealed class AssistantOrchestrator(
     private ToolRunStream StreamToolRunAsync(
         AssistantSession session,
         SessionChatRequest request,
+        ToolUseDecision toolDecision,
         CancellationToken cancellationToken)
     {
         var channel = Channel.CreateUnbounded<SessionChatStreamEvent>();
@@ -129,7 +136,7 @@ public sealed class AssistantOrchestrator(
                 var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
                     Agent: request.Agent ?? session.Agent,
                     Message: request.Message,
-                    AllowTools: request.AllowTools,
+                    AllowTools: toolDecision.ShouldRunTools,
                     PersistToMemory: request.PersistToMemory,
                     ConversationId: session.Id,
                     Model: request.Model ?? session.Model,
@@ -173,7 +180,7 @@ public sealed class AssistantOrchestrator(
                     Response: agentResponse.Response,
                     Messages: nextMessages,
                     Metrics: agentResponse.Metrics,
-                    ReasoningSteps: agentResponse.ReasoningSteps ?? [],
+                    ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
                     Summarized: false);
             }
             finally
@@ -239,7 +246,7 @@ public sealed class AssistantOrchestrator(
             Response: response,
             Messages: nextMessages,
             Metrics: metrics,
-            ReasoningSteps: [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)],
+            ReasoningSteps: WithToolDecision(DecideToolUse(request, agent, messages), [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]),
             Summarized: summarized);
 
         await sessions.SaveAsync(session with
@@ -325,6 +332,12 @@ public sealed class AssistantOrchestrator(
         var triggerTokens = _options.Orchestration.ContextMaxEstimatedTokens * _options.Orchestration.ContextSummaryTriggerPercent / 100;
         return ContextEstimator.EstimateTokens(messages) >= triggerTokens;
     }
+
+    private ToolUseDecision DecideToolUse(SessionChatRequest request, AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages) =>
+        toolUsePlanner.Decide(new ToolUsePlanningRequest(request.Message, agent, request.AllowTools, messages));
+
+    private static IReadOnlyList<ReasoningStep> WithToolDecision(ToolUseDecision decision, IReadOnlyList<ReasoningStep> steps) =>
+        [new ReasoningStep("tool_policy", $"{decision.Policy}: {decision.Reason} Suggested={string.Join(", ", decision.SuggestedTools)}", DateTimeOffset.UtcNow), .. steps];
 
     private async Task<string> SummarizeAsync(AssistantSession session, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken)
     {

@@ -104,9 +104,12 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
             CompletedAt = progress.Status.Equals("complete", StringComparison.OrdinalIgnoreCase) ? DateTimeOffset.UtcNow : node.CompletedAt
         };
         nodes.Add(nextNode);
-        var artifacts = progress.Result is null
-            ? graph.Artifacts
-            : [.. graph.Artifacts, NewArtifact("tool_result", progress.Tool, progress.Result)];
+        var artifacts = graph.Artifacts.ToList();
+        if (progress.Result is not null)
+        {
+            artifacts.RemoveAll(artifact => artifact.Kind == "tool_result" && artifact.Title.Equals(progress.Tool, StringComparison.OrdinalIgnoreCase));
+            artifacts.Add(NewArtifact("tool_result", progress.Tool, progress.Result));
+        }
         var eventContent = progress.Arguments is null
             ? progress.Content
             : $"{progress.Content}\n{JsonSerializer.Serialize(progress.Arguments)}";

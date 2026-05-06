@@ -87,6 +87,7 @@ builder.Services.AddSingleton<IAssistantSessionStore, FileAssistantSessionStore>
 builder.Services.AddSingleton<ITaskGraphStore, FileTaskGraphStore>();
 builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
+builder.Services.AddSingleton<IToolUsePlanner, ToolUsePlanner>();
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();
 builder.Services.AddHostedService<LocalModelSetupHostedService>();

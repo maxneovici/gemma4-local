@@ -122,7 +122,9 @@ async function loadTools() {
 
 async function loadApprovals() {
   state.approvals = await api('/approvals');
-  $('approvals').innerHTML = state.approvals.slice(0, 5).map(approval => `
+  const pending = state.approvals.filter(approval => approval.status === 'pending');
+  const recent = [...pending, ...state.approvals.filter(approval => approval.status !== 'pending')].slice(0, 5);
+  $('approvals').innerHTML = recent.map(approval => `
     <div class="approval ${escapeHtml(approval.status)}">
       <strong>${escapeHtml(approval.title)}</strong>
       <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}</span>
