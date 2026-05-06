@@ -9,7 +9,7 @@ public static class LocalAiEndpoints
 {
     public static IEndpointRouteBuilder MapLocalAiEndpoints(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/", (IOptions<LocalAiOptions> options) => Results.Ok(new
+        app.MapGet("/api", (IOptions<LocalAiOptions> options) => Results.Ok(new
         {
             Service = "LLLMax local AI assistant",
             options.Value.AppName,

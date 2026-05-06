@@ -90,8 +90,8 @@ app.UseSwaggerUI(options =>
     options.SwaggerEndpoint("/swagger/v1/swagger.json", "LLLMax v1");
 });
 
-app.UseDefaultFiles();
 app.UseStaticFiles();
+app.MapFallbackToFile("index.html");
 
 app.MapLocalAiEndpoints();
 app.MapAgentEndpoints();
