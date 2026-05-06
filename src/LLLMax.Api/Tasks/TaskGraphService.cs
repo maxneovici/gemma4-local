@@ -15,22 +15,16 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
         }
 
         var now = DateTimeOffset.UtcNow;
-        var node = new TaskGraphNode(
-            Id: NewId(),
-            Title: goal,
-            Status: "active",
-            Confidence: 0.35,
-            StartedAt: now);
         var graph = new TaskGraph(
             Id: NewId(),
             SessionId: sessionId,
             Goal: goal,
             Status: "active",
-            ActiveNodeId: node.Id,
+            ActiveNodeId: null,
             Confidence: 0.35,
             CreatedAt: now,
             UpdatedAt: now,
-            Nodes: [node],
+            Nodes: [],
             Artifacts: [],
             Events: [NewEvent("goal", goal)]);
 
@@ -72,24 +66,26 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
     public async Task<TaskGraph> RecordRunStartedAsync(string sessionId, string goal, CancellationToken cancellationToken)
     {
         var graph = await EnsureForSessionAsync(sessionId, goal, cancellationToken);
-        var activeNode = graph.Nodes.FirstOrDefault(node => node.Id == graph.ActiveNodeId);
-        var nodes = graph.Nodes.Select(node => node.Id == graph.ActiveNodeId
-            ? node with { Status = "active", StartedAt = node.StartedAt ?? DateTimeOffset.UtcNow, Blocker = null }
+        var now = DateTimeOffset.UtcNow;
+        var nodes = graph.Nodes.Select(node => node.Status.Equals("active", StringComparison.OrdinalIgnoreCase)
+            ? node with { Status = "complete", Confidence = Math.Max(node.Confidence, 0.65), CompletedAt = node.CompletedAt ?? now, Blocker = null }
             : node).ToList();
+        var node = new TaskGraphNode(NewId(), goal, "turn", "active", Confidence: 0.35, StartedAt: now);
+        nodes.Add(node);
 
-        if (activeNode is null)
+        if (!graph.Goal.Equals(goal, StringComparison.OrdinalIgnoreCase))
         {
-            var node = new TaskGraphNode(NewId(), goal, "active", Confidence: graph.Confidence, StartedAt: DateTimeOffset.UtcNow);
-            nodes.Add(node);
-            graph = graph with { ActiveNodeId = node.Id };
+            graph = graph with { Goal = goal };
         }
 
         return await SaveAsync(graph with
         {
             Status = "active",
+            ActiveNodeId = node.Id,
+            Confidence = 0.35,
             Nodes = nodes,
             Events = [.. graph.Events, NewEvent("run_started", goal)],
-            UpdatedAt = DateTimeOffset.UtcNow
+            UpdatedAt = now
         }, cancellationToken);
     }
 
@@ -97,8 +93,8 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
     {
         var graph = await EnsureForSessionAsync(sessionId, progress.Tool, cancellationToken);
         var title = $"Tool {progress.Tool}";
-        var toolNode = graph.Nodes.LastOrDefault(node => node.Title.Equals(title, StringComparison.OrdinalIgnoreCase) && node.Status != "complete");
-        var node = toolNode ?? new TaskGraphNode(NewId(), title, progress.Status, Confidence: 0.45, StartedAt: DateTimeOffset.UtcNow);
+        var toolNode = graph.Nodes.LastOrDefault(node => node.Kind == "tool" && node.Title.Equals(title, StringComparison.OrdinalIgnoreCase) && node.Status != "complete");
+        var node = toolNode ?? new TaskGraphNode(NewId(), title, "tool", progress.Status, Confidence: 0.45, StartedAt: DateTimeOffset.UtcNow);
         var nodes = graph.Nodes.Where(existing => existing.Id != node.Id).ToList();
         var nextNode = node with
         {
@@ -115,10 +111,14 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
             ? progress.Content
             : $"{progress.Content}\n{JsonSerializer.Serialize(progress.Arguments)}";
 
+        var activeNodeId = progress.Status.Equals("complete", StringComparison.OrdinalIgnoreCase)
+            ? nodes.LastOrDefault(existing => existing.Kind == "turn" && existing.Status == "active")?.Id
+            : nextNode.Id;
+
         return await SaveAsync(graph with
         {
             Status = progress.Status.Equals("blocked", StringComparison.OrdinalIgnoreCase) ? "blocked" : "active",
-            ActiveNodeId = nextNode.Id,
+            ActiveNodeId = activeNodeId,
             Nodes = nodes,
             Artifacts = artifacts,
             Events = [.. graph.Events, NewEvent($"tool_{progress.Status}", eventContent)],
@@ -137,17 +137,20 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
 
         if (!string.IsNullOrWhiteSpace(answer))
         {
+            artifacts.RemoveAll(artifact => artifact.Kind == "answer");
             artifacts.Add(NewArtifact("answer", "Final answer", answer));
         }
 
         if (reasoningSteps.Count > 0)
         {
+            artifacts.RemoveAll(artifact => artifact.Kind == "trace");
             artifacts.Add(NewArtifact("trace", "Reasoning trace", string.Join("\n", reasoningSteps.Select(step => $"{step.Kind}: {step.Content}"))));
         }
 
         return await SaveAsync(graph with
         {
             Status = "complete",
+            ActiveNodeId = null,
             Confidence = Math.Max(graph.Confidence, 0.8),
             Nodes = nodes,
             Artifacts = artifacts,
@@ -178,7 +181,11 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
         ?? throw new InvalidOperationException($"Task graph '{graphId}' does not exist.");
 
     private Task<TaskGraph> SaveAsync(TaskGraph graph, CancellationToken cancellationToken) =>
-        store.SaveAsync(graph with { Confidence = ClampConfidence(graph.Confidence) }, cancellationToken);
+        store.SaveAsync(graph with
+        {
+            Confidence = ClampConfidence(graph.Confidence),
+            Nodes = graph.Nodes.Select(node => string.IsNullOrWhiteSpace(node.Kind) ? node with { Kind = "turn" } : node).ToList()
+        }, cancellationToken);
 
     private static TaskGraphEvent NewEvent(string kind, string content) =>
         new(NewId(), kind, content, DateTimeOffset.UtcNow);

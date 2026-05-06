@@ -15,6 +15,8 @@ public sealed class AssistantOrchestrator(
     IAgentRuntime agentRuntime,
     ILocalChatClient chatClient,
     ITaskGraphService taskGraphs,
+    IAgentRegistry agentRegistry,
+    IModelRouter modelRouter,
     IOptions<LocalAiOptions> options) : IAssistantOrchestrator
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -201,7 +203,7 @@ public sealed class AssistantOrchestrator(
             summarized = true;
         }
 
-        var agent = _options.Agents.FirstOrDefault(agent => agent.Name.Equals(request.Agent ?? session.Agent, StringComparison.OrdinalIgnoreCase));
+        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
         var route = ResolveStreamRoute(agent, request, session);
         var streamMessages = BuildStreamMessages(agent, messages);
         var responseBuilder = new StringBuilder();
@@ -265,7 +267,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var session = await sessions.GetAsync(sessionId, cancellationToken);
-        var agent = _options.Agents.FirstOrDefault(agent => agent.Name.Equals(request.Agent ?? session.Agent, StringComparison.OrdinalIgnoreCase));
+        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
         var route = ResolveStreamRoute(agent, request, session);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
@@ -338,32 +340,17 @@ public sealed class AssistantOrchestrator(
         return response.Response;
     }
 
-    private StreamRoute ResolveStreamRoute(AgentDefinition? agent, SessionChatRequest request, AssistantSession session)
+    private ModelRoute ResolveStreamRoute(AgentDefinition agent, SessionChatRequest request, AssistantSession session)
     {
-        var reasoningEffort = request.ReasoningEffort ?? _options.ModelRouter.DefaultReasoningEffort;
-        var model = request.Model ?? session.Model ?? agent?.Model ?? reasoningEffort.ToLowerInvariant() switch
-        {
-            "low" => _options.ModelRouter.InteractiveModel ?? _options.DefaultModel,
-            "high" => _options.ModelRouter.DeepReasoningModel ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel,
-            _ => _options.ModelRouter.BalancedModel ?? _options.DefaultModel
-        };
-
-        return new StreamRoute(
-            Model: model,
-            ReasoningEffort: reasoningEffort,
-            EnableThinking: reasoningEffort.Equals("high", StringComparison.OrdinalIgnoreCase),
-            Temperature: _options.Sampling.Temperature);
+        return modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model ?? session.Model, request.ReasoningEffort));
     }
 
-    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition? agent, IReadOnlyList<LocalChatMessage> messages)
+    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages)
     {
-        var agentPrompt = agent is null ? string.Empty : $"\n\n{agent.SystemPrompt}";
-        var systemPrompt = $"{_options.SystemPrompt}{agentPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
+        var systemPrompt = $"{_options.SystemPrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
 
         return [new LocalChatMessage("system", systemPrompt), .. messages.Where(message => message.Role != "system")];
     }
-
-    private sealed record StreamRoute(string Model, string ReasoningEffort, bool EnableThinking, double Temperature);
 
     private sealed record ToolRunStream(IAsyncEnumerable<SessionChatStreamEvent> Events, Task<SessionChatResponse> Result);
 }

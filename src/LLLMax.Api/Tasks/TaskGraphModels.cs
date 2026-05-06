@@ -18,6 +18,7 @@ public sealed record TaskGraph(
 public sealed record TaskGraphNode(
     string Id,
     string Title,
+    string Kind,
     string Status,
     string? Blocker = null,
     double Confidence = 0.5,

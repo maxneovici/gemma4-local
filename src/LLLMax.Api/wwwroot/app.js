@@ -173,7 +173,7 @@ function renderTaskGraph(graph) {
       ${(graph.nodes ?? []).map(node => `
         <div class="node ${escapeHtml(node.status)}">
           <strong>${escapeHtml(node.title)}</strong>
-          <span>${escapeHtml(node.status)} · ${escapeHtml(Math.round((node.confidence ?? 0) * 100))}%</span>
+          <span>${escapeHtml(node.kind ?? 'turn')} · ${escapeHtml(node.status)} · ${escapeHtml(Math.round((node.confidence ?? 0) * 100))}%</span>
           ${node.blocker ? `<em>${escapeHtml(node.blocker)}</em>` : ''}
         </div>
       `).join('')}
