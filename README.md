@@ -14,7 +14,8 @@ The app is intentionally configured to use loopback-only Ollama endpoints by def
 - `IAgentRuntime` runs configured local agents with a multi-iteration tool loop.
 - `MarkdownAgentRegistry` merges configured agents with dynamic `.md` agent definitions in `data/agents`.
 - `IAssistantOrchestrator` owns sessions, context estimation, and summarization near context limits.
-- `IModelRouter` chooses interactive, balanced, or deep-reasoning models per request.
+- `IToolUsePlanner` uses a small router model to infer intent, response mode, effort, and direct-vs-orchestrated policy before the coordinator chooses any tools or subagents.
+- `IModelRouter` chooses interactive, balanced, or deep-reasoning response models per request.
 - `ILocalToolRegistry` exposes local tools to agents.
 - `ILocalMemoryStore` stores local vector memory; the default implementation persists JSON under `data/memory`.
 - `/`, `/sessions`, `/agents`, `/memory`, `/documents`, `/integrations`, `/models`, `/health`, and `/openai` expose the local app and API.
@@ -59,6 +60,8 @@ Important flags:
 - `LocalAi:RequireLoopback=true` blocks non-local model endpoints.
 - `LocalAi:EnsureDefaultModel=true` runs `ollama pull <DefaultModel>` at startup if the model is missing.
 - `LocalAi:StopManagedProcessOnShutdown=true` stops only the process started by this app.
+- `LocalAi:ModelRouter:RouterModel=gemma4:e2b` keeps routing on the fastest local model while preserving intent and parameter extraction.
+- `LocalAi:ModelRouter:RouterMaxOutputTokens=160` caps planner output to reduce first-token latency.
 - `LocalAi:Memory:EmbeddingModel=nomic-embed-text` uses a dedicated local embedding model for vector memory.
 - `LocalAi:Tools:EnableSafeShell=false` keeps local shell execution disabled unless explicitly enabled.
 

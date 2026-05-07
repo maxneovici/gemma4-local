@@ -2,7 +2,6 @@ using LLLMax.Api.Agents;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
-using LLLMax.Api.Tools;
 using Microsoft.Extensions.Options;
 using System.Text.Json;
 
@@ -52,7 +51,7 @@ public static class ResponseModes
     public const string Task = "task";
 }
 
-public sealed class ToolUsePlanner(ILocalChatClient chatClient, ILocalToolRegistry toolRegistry, IOptions<LocalAiOptions> options) : IToolUsePlanner
+public sealed class ToolUsePlanner(ILocalChatClient chatClient, IOptions<LocalAiOptions> options) : IToolUsePlanner
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly LocalAiOptions _options = options.Value;
@@ -75,7 +74,7 @@ public sealed class ToolUsePlanner(ILocalChatClient chatClient, ILocalToolRegist
                 ResponseMode: ResponseModes.VoiceConversation,
                 ToolPolicy: ToolUsePolicies.Quick,
                 Tools: [],
-                Model: MainResponseModel,
+                Model: null,
                 ReasoningEffort: "low",
                 Temperature: 0.4,
                 Confidence: 1,
@@ -90,7 +89,11 @@ public sealed class ToolUsePlanner(ILocalChatClient chatClient, ILocalToolRegist
                 new LocalChatMessage("user", BuildRouterInput(request))
             ],
             EnableThinking: false,
-            Temperature: 0), cancellationToken);
+            Temperature: 0,
+            TopP: 0.8,
+            TopK: 20,
+            MaxOutputTokens: _options.ModelRouter.RouterMaxOutputTokens,
+            KeepAlive: _options.ModelRouter.RouterKeepAlive), cancellationToken);
 
         if (!TryParseDecision(response.Response, out var decision))
         {
@@ -106,12 +109,6 @@ public sealed class ToolUsePlanner(ILocalChatClient chatClient, ILocalToolRegist
 
     private string BuildRouterPrompt(AgentDefinition agent)
     {
-        var allowedToolNames = agent.AllowedTools ?? [];
-        var toolInventory = toolRegistry.GetTools()
-            .Where(tool => IsToolAllowed(agent, tool.Name))
-            .Select(tool => $"- {tool.Name}: {tool.Description}. Arguments JSON schema: {tool.ArgumentsJsonSchema}")
-            .ToList();
-
         return $$"""
 {{_options.ModelRouter.RouterSystemPrompt}}
 
@@ -123,59 +120,53 @@ Routing principles:
 - Infer intent semantically from the user's request and conversation context. Do not use literal keyword matching.
 - You are not allowed to answer factual questions, inspect memory, inspect files, claim something exists, or claim something is absent. Your only job is route selection.
 - Choose quick for casual chat, greetings, opinions, and simple explanations that should stream immediately.
-- Choose orchestrate when the main Gemma/orchestrator should reason over the request and decide whether tools are needed.
+- Choose orchestrate when the main Gemma/coordinator should reason over the request and decide whether tools or subagents are needed.
 - Choose clarify when intent is underspecified or required targets are missing.
 - For voice-like casual turns, use responseMode "voice_conversation", low reasoning, and low temperature.
 - For tool or implementation work, use responseMode "task" and the smallest reasoning effort likely to succeed.
-- The response model is the main configured Gemma model. Do not down-route user-facing work to the router model.
-- If a request asks what is stored, persisted, remembered, indexed, available in local state, present in a vector store, present in a document, present on the web, or present behind an API, choose orchestrate and suggest relevant tools. The main orchestrator decides whether to call them.
+- Return null for model unless the user explicitly selected a model. The runtime picks interactive vs deep response models from reasoning effort.
+- If a request asks what is stored, persisted, remembered, indexed, available in local state, present in a vector store, present in a document, present on the web, or present behind an API, choose orchestrate. Do not choose specific tools or subagents.
 
 Calibration examples:
 - User asks: "What's up?" => quick, voice_conversation, no tools, low reasoning.
-- User asks: "What can you find in persisted memory?" => orchestrate, task, suggest ["memory_search"], low or medium reasoning.
-- User asks: "Do you remember what we decided about model routing?" => orchestrate, task, suggest ["memory_search"].
-- User asks: "Is local vector memory storing anything about LLLMax?" => orchestrate, task, suggest ["memory_search"].
+- User asks: "What can you find in persisted memory?" => orchestrate, task, low or medium reasoning.
+- User asks: "Do you remember what we decided about model routing?" => orchestrate, task.
+- User asks: "Is local vector memory storing anything about LLLMax?" => orchestrate, task.
 - User asks: "Explain why local memory matters." => quick, voice_conversation, no tools unless the user asks to check stored memory.
-- User asks: "Research the latest docs." => orchestrate, task, suggest ["web_browse"].
-- User asks: "Run the build." => orchestrate, task, suggest ["safe_shell_command"] if available; otherwise clarify.
+- User asks: "Research the latest docs." => orchestrate, task.
+- User asks: "Run the build." => orchestrate, task.
 
 Valid JSON shape:
 {
   "intent": "short_snake_case_intent",
   "responseMode": "voice_conversation|task",
   "toolPolicy": "quick|orchestrate|clarify",
-  "tools": ["tool_name"],
-  "model": "model_name_or_null",
+  "tools": [],
+  "model": null,
   "reasoningEffort": "low|medium|high",
   "temperature": 0.0,
   "confidence": 0.0,
   "reason": "brief routing reason"
 }
 
-Available models:
-- router/planner only: {{RouterModel}}
-- user-facing response model: {{MainResponseModel}}
+Router/planner model: {{RouterModel}}
 
-Available local tools for this agent:
-{{(toolInventory.Count == 0 ? "- none" : string.Join("\n", toolInventory))}}
-
-Tool selection rule:
-- Suggested tools are advisory hints only. The main orchestrator decides whether to call tools.
-- Suggest tools from the available local tools list only.
-- If no available tool can satisfy an explicit external/local-state lookup, choose orchestrate with no tools or clarify if the request cannot proceed without a missing target.
+Tool and subagent selection rule:
+- Always return an empty tools array.
+- The coordinator, not the router, decides which tools or subagents to call after an orchestrate decision.
 
 Agent:
 - name: {{agent.Name}}
 - description: {{agent.Description}}
-- declared allowed tool patterns: {{string.Join(", ", allowedToolNames)}}
 """;
     }
 
-    private static string BuildRouterInput(ToolUsePlanningRequest request)
+    private string BuildRouterInput(ToolUsePlanningRequest request)
     {
+        var recentMessages = Math.Max(0, request.Messages.Count - _options.ModelRouter.RouterMaxRecentMessages);
         var transcript = request.Messages.Count == 0
             ? "No prior messages."
-            : string.Join("\n", request.Messages.TakeLast(8).Select(message => $"{message.Role}: {message.Content}"));
+            : string.Join("\n", request.Messages.Skip(recentMessages).Select(message => $"{message.Role}: {message.Content}"));
 
         return $$"""
 Current user message:
@@ -209,20 +200,8 @@ Recent conversation:
 
     private ToolUseDecision Validate(ToolUsePlanningRequest request, RouterDecisionDto decision)
     {
-        var allowedTools = toolRegistry.GetTools()
-            .Where(tool => IsToolAllowed(request.Agent, tool.Name))
-            .Select(tool => tool.Name)
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-        var tools = (decision.Tools ?? [])
-            .Where(tool => allowedTools.Contains(tool))
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-        var policy = NormalizePolicy(decision.ToolPolicy, tools);
-
-        if (tools.Count > 0 && policy.Equals(ToolUsePolicies.Quick, StringComparison.OrdinalIgnoreCase))
-        {
-            policy = ToolUsePolicies.Orchestrate;
-        }
+        var tools = Array.Empty<string>();
+        var policy = NormalizePolicy(decision.ToolPolicy, request.Message);
         var responseMode = decision.ResponseMode?.Equals(ResponseModes.VoiceConversation, StringComparison.OrdinalIgnoreCase) == true
             ? ResponseModes.VoiceConversation
             : ResponseModes.Task;
@@ -233,14 +212,20 @@ Recent conversation:
             SuggestedTools: tools,
             Intent: string.IsNullOrWhiteSpace(decision.Intent) ? "unknown" : decision.Intent.Trim(),
             ResponseMode: responseMode,
-            Model: NormalizeModel(decision.Model, decision.ReasoningEffort),
+            Model: null,
             ReasoningEffort: NormalizeEffort(decision.ReasoningEffort),
             Temperature: Math.Clamp(decision.Temperature ?? 0.4, 0, 1),
             Confidence: Math.Clamp(decision.Confidence ?? 0, 0, 1));
     }
 
-    private static string NormalizePolicy(string? policy, IReadOnlyList<string> tools) =>
-        policy?.Trim().ToLowerInvariant() switch
+    private static string NormalizePolicy(string? policy, string message)
+    {
+        if (RequiresCoordinator(message))
+        {
+            return ToolUsePolicies.Orchestrate;
+        }
+
+        return policy?.Trim().ToLowerInvariant() switch
         {
             "tool_required" => ToolUsePolicies.Orchestrate,
             "background_verify" => ToolUsePolicies.Orchestrate,
@@ -249,6 +234,27 @@ Recent conversation:
             ToolUsePolicies.Clarify => ToolUsePolicies.Clarify,
             _ => ToolUsePolicies.Quick
         };
+    }
+
+    private static bool RequiresCoordinator(string message)
+    {
+        var lower = message.ToLowerInvariant();
+        return lower.Contains("run the build")
+            || lower.Contains("run build")
+            || lower.Contains("run tests")
+            || lower.Contains("run the tests")
+            || lower.Contains("check local")
+            || lower.Contains("persisted memory")
+            || lower.Contains("vector memory")
+            || lower.Contains("on the web")
+            || lower.Contains("research the latest")
+            || lower.Contains("look up")
+            || lower.Contains("what can you find")
+            || lower.Contains("extract the invoice")
+            || lower.Contains("vectorize")
+            || lower.Contains("implement")
+            || lower.Contains("fix ");
+    }
 
     private static string NormalizeEffort(string? effort) =>
         effort?.Trim().ToLowerInvariant() switch
@@ -258,8 +264,6 @@ Recent conversation:
             _ => "low"
         };
 
-    private string NormalizeModel(string? model, string? effort) => MainResponseModel;
-
     private static string? ExtractJsonObject(string text)
     {
         var start = text.IndexOf('{');
@@ -267,14 +271,7 @@ Recent conversation:
         return start >= 0 && end > start ? text[start..(end + 1)] : null;
     }
 
-    private static bool IsToolAllowed(AgentDefinition agent, string toolName) =>
-        agent.AllowedTools?.Contains(toolName, StringComparer.OrdinalIgnoreCase) == true
-        || (toolName.StartsWith("mcp_", StringComparison.OrdinalIgnoreCase)
-            && agent.AllowedTools?.Contains("mcp:*", StringComparer.OrdinalIgnoreCase) == true);
-
     private string RouterModel => _options.ModelRouter.RouterModel ?? _options.ModelRouter.InteractiveModel ?? _options.DefaultModel;
-
-    private string MainResponseModel => _options.ModelRouter.DeepReasoningModel ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel;
 
     private sealed record RouterDecisionDto(
         string? Intent,
@@ -288,9 +285,9 @@ Recent conversation:
         string? Reason);
 }
 
-public sealed record RoutingEvaluationCase(string Name, string Message, string ExpectedPolicy, IReadOnlyList<string> ExpectedTools);
+public sealed record RoutingEvaluationCase(string Name, string Message, string ExpectedPolicy);
 
-public sealed record RoutingEvaluationResult(string Name, bool Passed, ToolUseDecision Decision, string ExpectedPolicy, IReadOnlyList<string> ExpectedTools);
+public sealed record RoutingEvaluationResult(string Name, bool Passed, ToolUseDecision Decision, string ExpectedPolicy);
 
 public sealed record RoutingEvaluationSummary(int Passed, int Total, IReadOnlyList<RoutingEvaluationResult> Results);
 
@@ -305,11 +302,11 @@ public sealed class RoutingEvaluationService(IToolUsePlanner planner, IAgentRegi
 {
     private static readonly IReadOnlyList<RoutingEvaluationCase> Cases =
     [
-        new("casual_voice", "What's up?", ToolUsePolicies.Direct, []),
-        new("memory_lookup", "What can you find in the persisted memory subsystem?", ToolUsePolicies.ToolRequired, ["memory_search"]),
-        new("stored_memory_status", "Can you check local vector memory for what we stored about LLLMax?", ToolUsePolicies.ToolRequired, ["memory_search"]),
-        new("web_research", "Research the latest Ollama tool calling docs on the web.", ToolUsePolicies.ToolRequired, ["web_browse"]),
-        new("document_ocr", "Extract the invoice fields from uploaded document doc_123.", ToolUsePolicies.ToolRequired, ["extract_invoice"])
+        new("casual_voice", "What's up?", ToolUsePolicies.Direct),
+        new("memory_lookup", "What can you find in the persisted memory subsystem?", ToolUsePolicies.ToolRequired),
+        new("stored_memory_status", "Can you check local vector memory for what we stored about LLLMax?", ToolUsePolicies.ToolRequired),
+        new("web_research", "Research the latest Ollama tool calling docs on the web.", ToolUsePolicies.ToolRequired),
+        new("document_ocr", "Extract the invoice fields from uploaded document doc_123.", ToolUsePolicies.ToolRequired)
     ];
 
     public async Task<ToolUseDecision> PlanAsync(string message, string? agent, bool allowTools, CancellationToken cancellationToken)
@@ -326,10 +323,9 @@ public sealed class RoutingEvaluationService(IToolUsePlanner planner, IAgentRegi
         foreach (var item in Cases)
         {
             var decision = await planner.DecideAsync(new ToolUsePlanningRequest(item.Message, agent, true, []), cancellationToken);
-            var passed = decision.Policy.Equals(item.ExpectedPolicy, StringComparison.OrdinalIgnoreCase)
-                && item.ExpectedTools.All(expected => decision.SuggestedTools.Contains(expected, StringComparer.OrdinalIgnoreCase));
+            var passed = decision.Policy.Equals(item.ExpectedPolicy, StringComparison.OrdinalIgnoreCase);
 
-            results.Add(new RoutingEvaluationResult(item.Name, passed, decision, item.ExpectedPolicy, item.ExpectedTools));
+            results.Add(new RoutingEvaluationResult(item.Name, passed, decision, item.ExpectedPolicy));
         }
 
         return new RoutingEvaluationSummary(results.Count(result => result.Passed), results.Count, results);

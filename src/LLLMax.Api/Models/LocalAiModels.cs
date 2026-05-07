@@ -13,7 +13,9 @@ public sealed record LocalChatRequest(
     bool EnableThinking = false,
     double? Temperature = null,
     double? TopP = null,
-    int? TopK = null);
+    int? TopK = null,
+    int? MaxOutputTokens = null,
+    string? KeepAlive = null);
 
 public sealed record LocalChatMessage(
     string Role,
@@ -53,6 +55,8 @@ public sealed record OllamaChatRequest(
     [property: JsonPropertyName("messages")] IReadOnlyList<OllamaMessage> Messages,
     [property: JsonPropertyName("options")] OllamaOptions Options,
     [property: JsonPropertyName("think")] bool? Think = null,
+    [property: JsonPropertyName("keep_alive")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KeepAlive = null,
     [property: JsonPropertyName("tools")] IReadOnlyList<OllamaToolDefinition>? Tools = null);
 
 public sealed record OllamaStreamChatRequest(
@@ -60,7 +64,9 @@ public sealed record OllamaStreamChatRequest(
     [property: JsonPropertyName("stream")] bool Stream,
     [property: JsonPropertyName("messages")] IReadOnlyList<OllamaMessage> Messages,
     [property: JsonPropertyName("options")] OllamaOptions Options,
-    [property: JsonPropertyName("think")] bool? Think = null);
+    [property: JsonPropertyName("think")] bool? Think = null,
+    [property: JsonPropertyName("keep_alive")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? KeepAlive = null);
 
 public sealed record OllamaNativeToolChatRequest(
     [property: JsonPropertyName("model")] string Model,
@@ -114,7 +120,9 @@ public sealed record OllamaVisionChatRequest(
 public sealed record OllamaOptions(
     [property: JsonPropertyName("temperature")] double Temperature,
     [property: JsonPropertyName("top_p")] double TopP,
-    [property: JsonPropertyName("top_k")] int TopK);
+    [property: JsonPropertyName("top_k")] int TopK,
+    [property: JsonPropertyName("num_predict")]
+    [property: JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] int? NumPredict = null);
 
 public sealed record OllamaChatResponse(
     [property: JsonPropertyName("model")] string Model,

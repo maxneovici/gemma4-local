@@ -47,7 +47,7 @@ public sealed class AssistantOrchestrator(
             AllowTools: request.AllowTools,
             PersistToMemory: request.PersistToMemory,
             ConversationId: session.Id,
-            Model: request.Model ?? toolDecision.Model ?? session.Model,
+            Model: ResolveRunModel(request, session, toolDecision),
             ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
             Temperature: toolDecision.Temperature,
             Messages: messages,
@@ -143,7 +143,7 @@ public sealed class AssistantOrchestrator(
                     AllowTools: request.AllowTools,
                     PersistToMemory: request.PersistToMemory,
                     ConversationId: session.Id,
-                    Model: request.Model ?? toolDecision.Model ?? session.Model,
+                    Model: ResolveRunModel(request, session, toolDecision),
                     ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
                     Temperature: toolDecision.Temperature,
                     Messages: messages,
@@ -348,7 +348,7 @@ public sealed class AssistantOrchestrator(
         await toolUsePlanner.DecideAsync(new ToolUsePlanningRequest(request.Message, agent, request.AllowTools, messages), cancellationToken);
 
     private static IReadOnlyList<ReasoningStep> WithToolDecision(ToolUseDecision decision, IReadOnlyList<ReasoningStep> steps) =>
-        [new ReasoningStep("route", $"intent={decision.Intent}; mode={decision.ResponseMode}; policy={decision.Policy}; model={decision.Model}; reasoning={decision.ReasoningEffort}; temperature={decision.Temperature:0.00}; confidence={decision.Confidence:0.00}; tools={string.Join(", ", decision.SuggestedTools)}; reason={decision.Reason}", DateTimeOffset.UtcNow), .. steps];
+        [new ReasoningStep("route", $"intent={decision.Intent}; mode={decision.ResponseMode}; policy={decision.Policy}; model={decision.Model}; reasoning={decision.ReasoningEffort}; temperature={decision.Temperature:0.00}; confidence={decision.Confidence:0.00}; reason={decision.Reason}", DateTimeOffset.UtcNow), .. steps];
 
     private static string RuntimeEventStatus(AgentRuntimeEvent runtimeEvent) =>
         runtimeEvent.Kind switch
@@ -377,11 +377,17 @@ public sealed class AssistantOrchestrator(
         var route = modelRouter.Resolve(new ModelRouteRequest(
             agent,
             request.Message,
-            request.Model ?? decision?.Model ?? session.Model,
+            request.Model ?? session.Model ?? (decision?.ShouldUseOrchestrator == true ? PreferredOrchestratorModel : decision?.Model),
             request.ReasoningEffort ?? decision?.ReasoningEffort));
 
         return decision is null ? route : route with { Temperature = decision.Temperature };
     }
+
+    private string? ResolveRunModel(SessionChatRequest request, AssistantSession session, ToolUseDecision decision) =>
+        request.Model ?? session.Model ?? (decision.ShouldUseOrchestrator ? PreferredOrchestratorModel : decision.Model);
+
+    private string PreferredOrchestratorModel =>
+        _options.ModelRouter.DeepReasoningModel ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel;
 
     private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, ToolUseDecision? toolDecision)
     {

@@ -22,8 +22,10 @@ public sealed class OllamaLocalChatClient(IOllamaApi ollamaApi, IOptions<LocalAi
             Options: new OllamaOptions(
                 Temperature: request.Temperature ?? _options.Sampling.Temperature,
                 TopP: request.TopP ?? _options.Sampling.TopP,
-                TopK: request.TopK ?? _options.Sampling.TopK),
-            Think: request.EnableThinking ? true : null);
+                TopK: request.TopK ?? _options.Sampling.TopK,
+                NumPredict: request.MaxOutputTokens),
+            Think: request.EnableThinking,
+            KeepAlive: request.KeepAlive);
 
         var response = await ollamaApi.ChatAsync(ollamaRequest, cancellationToken);
 
@@ -50,8 +52,10 @@ public sealed class OllamaLocalChatClient(IOllamaApi ollamaApi, IOptions<LocalAi
             Options: new OllamaOptions(
                 Temperature: request.Temperature ?? _options.Sampling.Temperature,
                 TopP: request.TopP ?? _options.Sampling.TopP,
-                TopK: request.TopK ?? _options.Sampling.TopK),
-            Think: request.EnableThinking ? true : null);
+                TopK: request.TopK ?? _options.Sampling.TopK,
+                NumPredict: request.MaxOutputTokens),
+            Think: request.EnableThinking,
+            KeepAlive: request.KeepAlive);
 
         await foreach (var chunk in ollamaApi.StreamChatAsync(ollamaRequest, cancellationToken))
         {

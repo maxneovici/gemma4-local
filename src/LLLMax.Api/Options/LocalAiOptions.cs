@@ -139,6 +139,12 @@ public sealed class LocalAiModelRouterOptions
 
     public string RouterSystemPrompt { get; init; } = "You are the LLLMax routing planner. You infer user intent and choose local execution parameters. You do not answer the user. You return strict JSON only.";
 
+    public int RouterMaxOutputTokens { get; init; } = 160;
+
+    public int RouterMaxRecentMessages { get; init; } = 4;
+
+    public string RouterKeepAlive { get; init; } = "30m";
+
     public string? InteractiveModel { get; init; }
 
     public string? BalancedModel { get; init; }

@@ -83,7 +83,11 @@ public sealed class OllamaApi(IHttpClientFactory httpClientFactory, LocalEndpoin
     {
         endpointGuard.ThrowIfRemoteEndpoint();
 
-        var response = await httpClientFactory.CreateClient("ollama").PostAsJsonAsync("/api/chat", request, cancellationToken);
+        var httpRequest = new HttpRequestMessage(HttpMethod.Post, "/api/chat")
+        {
+            Content = JsonContent.Create(request)
+        };
+        var response = await httpClientFactory.CreateClient("ollama").SendAsync(httpRequest, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
         if (!response.IsSuccessStatusCode)
         {

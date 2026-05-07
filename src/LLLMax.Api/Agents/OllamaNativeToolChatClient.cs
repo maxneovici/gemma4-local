@@ -18,7 +18,7 @@ public sealed class OllamaNativeToolChatClient(IOllamaApi ollamaApi, IOptions<Lo
             Messages: request.Messages.Select(message => new OllamaNativeMessage(message.Role, message.Content)).ToList(),
             Options: new OllamaOptions(request.Temperature, _options.Sampling.TopP, _options.Sampling.TopK),
             Tools: request.Tools.Select(tool => tool.ToOllamaToolDefinition()).ToList(),
-            Think: request.EnableThinking ? true : null), cancellationToken);
+            Think: request.EnableThinking), cancellationToken);
 
         var toolCalls = response.Message?.ToolCalls?
             .Select(call => new ParsedToolCall(
