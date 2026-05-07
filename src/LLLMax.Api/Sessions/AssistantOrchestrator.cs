@@ -41,6 +41,18 @@ public sealed class AssistantOrchestrator(
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
         var toolDecision = await DecideToolUseAsync(request, agent, messages, cancellationToken);
+        Func<AgentRuntimeEvent, CancellationToken, Task> onEvent = async (runtimeEvent, token) =>
+        {
+            if (runtimeEvent.Tool is not null)
+            {
+                await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
+                    Tool: runtimeEvent.Tool,
+                    Status: RuntimeEventStatus(runtimeEvent),
+                    Content: runtimeEvent.Content,
+                    Arguments: runtimeEvent.Arguments,
+                    Result: runtimeEvent.Result), token);
+            }
+        };
         var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
             Agent: request.Agent ?? session.Agent,
             Message: request.Message,
@@ -52,18 +64,7 @@ public sealed class AssistantOrchestrator(
             Temperature: toolDecision.Temperature,
             Messages: messages,
             DelegationDepth: 0,
-            OnEvent: async (runtimeEvent, token) =>
-            {
-                if (runtimeEvent.Tool is not null)
-                {
-                    await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
-                        Tool: runtimeEvent.Tool,
-                        Status: RuntimeEventStatus(runtimeEvent),
-                        Content: runtimeEvent.Content,
-                        Arguments: runtimeEvent.Arguments,
-                        Result: runtimeEvent.Result), token);
-                }
-            }), cancellationToken);
+            OnEvent: onEvent), cancellationToken);
 
         var completedGraph = await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, agentResponse.ReasoningSteps ?? [], cancellationToken);
         var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
@@ -137,6 +138,22 @@ public sealed class AssistantOrchestrator(
             {
                 var userMessage = new LocalChatMessage("user", request.Message);
                 var messages = session.Messages.Concat([userMessage]).ToList();
+                Func<AgentRuntimeEvent, CancellationToken, Task> onEvent = async (runtimeEvent, token) =>
+                {
+                    if (runtimeEvent.Tool is null)
+                    {
+                        return;
+                    }
+
+                    var graph = await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
+                        Tool: runtimeEvent.Tool,
+                        Status: RuntimeEventStatus(runtimeEvent),
+                        Content: runtimeEvent.Content,
+                        Arguments: runtimeEvent.Arguments,
+                        Result: runtimeEvent.Result), token);
+
+                    await channel.Writer.WriteAsync(new SessionChatStreamEvent("progress", runtimeEvent.Content, Payload: new { runtimeEvent, graph }), token);
+                };
                 var agentResponse = await agentRuntime.RunAsync(new AgentRunRequest(
                     Agent: request.Agent ?? session.Agent,
                     Message: request.Message,
@@ -148,22 +165,7 @@ public sealed class AssistantOrchestrator(
                     Temperature: toolDecision.Temperature,
                     Messages: messages,
                     DelegationDepth: 0,
-                    OnEvent: async (runtimeEvent, token) =>
-                    {
-                        if (runtimeEvent.Tool is null)
-                        {
-                            return;
-                        }
-
-                        var graph = await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
-                            Tool: runtimeEvent.Tool,
-                            Status: RuntimeEventStatus(runtimeEvent),
-                            Content: runtimeEvent.Content,
-                            Arguments: runtimeEvent.Arguments,
-                            Result: runtimeEvent.Result), token);
-
-                        await channel.Writer.WriteAsync(new SessionChatStreamEvent("progress", runtimeEvent.Content, Payload: new { runtimeEvent, graph }), token);
-                    }), cancellationToken);
+                    OnEvent: onEvent), cancellationToken);
 
                 var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
                 var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
@@ -377,14 +379,14 @@ public sealed class AssistantOrchestrator(
         var route = modelRouter.Resolve(new ModelRouteRequest(
             agent,
             request.Message,
-            request.Model ?? session.Model ?? (decision?.ShouldUseOrchestrator == true ? PreferredOrchestratorModel : decision?.Model),
+            request.Model ?? session.Model ?? decision?.Model ?? (decision?.ShouldUseOrchestrator == true ? PreferredOrchestratorModel : null),
             request.ReasoningEffort ?? decision?.ReasoningEffort));
 
         return decision is null ? route : route with { Temperature = decision.Temperature };
     }
 
     private string? ResolveRunModel(SessionChatRequest request, AssistantSession session, ToolUseDecision decision) =>
-        request.Model ?? session.Model ?? (decision.ShouldUseOrchestrator ? PreferredOrchestratorModel : decision.Model);
+        request.Model ?? session.Model ?? decision.Model ?? (decision.ShouldUseOrchestrator ? PreferredOrchestratorModel : null);
 
     private string PreferredOrchestratorModel =>
         _options.ModelRouter.DeepReasoningModel ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel;

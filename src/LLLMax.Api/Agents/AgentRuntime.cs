@@ -55,6 +55,7 @@ public sealed class AgentRuntime(
 
         var messages = BuildInitialMessages(request, prompt);
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
+        var retriedRequiredSmartHomeTool = false;
         LocalChatResponse response = default!;
 
         for (var iteration = 0; iteration <= maxIterations; iteration++)
@@ -105,6 +106,18 @@ public sealed class AgentRuntime(
             if (toolCall is null && request.AllowTools)
             {
                 ToolCallParser.TryParse(response.Response, out toolCall);
+            }
+
+            if (request.AllowTools
+                && toolCall is null
+                && !retriedRequiredSmartHomeTool
+                && !toolResults.Any(result => result.Tool.Equals("smart_home", StringComparison.OrdinalIgnoreCase))
+                && RequiresSmartHomeTool(agent, request.Message))
+            {
+                retriedRequiredSmartHomeTool = true;
+                reasoningSteps.Add(new ReasoningStep("tool_retry", "Retrying because a smart-home command requires smart_home tool execution.", DateTimeOffset.UtcNow));
+                messages = AppendRequiredSmartHomeToolInstruction(messages, request.Message);
+                continue;
             }
 
             if (!request.AllowTools || toolCall is null)
@@ -325,9 +338,10 @@ Skill instructions:
 - Skill creation and updates require approval. If approval is required, ask the user to approve it and retry the same tool with only the approvalId.
 
 Smart-home tools:
-- For smart-home light commands, call smart_home directly when it is available.
-- For every/all-lights commands, use device=lights, target=all, and explicit operation=on or operation=off. Do not use ambiguous toggle behavior.
-- For Samsung TV power or mute commands, use device=tv. Samsung mute is exposed as a toggle, so operation=mute and operation=unmute both send the same mute-toggle command.
+- For smart-home commands, call smart_home directly when it is available. Never claim a light or TV operation succeeded unless smart_home returned a result in the current turn.
+- For every/all-lights commands, use device=lights, target=all, and explicit operation=on or operation=off. The smart_home tool enforces excluded protected lights; never try to bypass those exclusions by guessing IDs.
+- For Samsung TV power or mute commands, use device=tv. Use operation=mute for mute requests and operation=unmute for unmute requests. Samsung mute is exposed as a toggle, so operation=mute and operation=unmute both send the same mute-toggle command.
+- For Samsung TV power commands, report that the command was sent unless the tool result explicitly says the TV state was verified.
 
 Background work:
 - You can use schedule_background_job for long-running local work that should continue after the chat turn returns.
@@ -384,6 +398,29 @@ Loop guardrails:
             new LocalChatMessage("assistant", assistantToolCall),
             new LocalChatMessage("user", $"Tool {toolName} returned this result:\n{toolResult}\n\nContinue the task. Emit another JSON tool call only if more tool work is required; otherwise provide the final answer.")
         ];
+
+    private static IReadOnlyList<LocalChatMessage> AppendRequiredSmartHomeToolInstruction(
+        IReadOnlyList<LocalChatMessage> messages,
+        string originalMessage) =>
+        [
+            .. messages,
+            new LocalChatMessage("assistant", "I need to use the smart_home tool for this smart-home command."),
+            new LocalChatMessage("user", $"The previous response did not call a tool. For this request, emit exactly one smart_home JSON tool call now and no final answer: {originalMessage}")
+        ];
+
+    private static bool RequiresSmartHomeTool(AgentDefinition agent, string message) =>
+        IsToolAllowed(agent, "smart_home") && IsSmartHomeCommand(message);
+
+    private static bool IsSmartHomeCommand(string message)
+    {
+        var lower = message.ToLowerInvariant();
+
+        return ContainsAny(lower, "tv", "light", "lights", "lamp", "lamps")
+            && ContainsAny(lower, "turn", "switch", "power", "mute", "unmute", " on", " off");
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private string BuildSkillContext(AgentDefinition agent, string message)
     {

@@ -233,6 +233,10 @@ public sealed class LocalHueOptions
     public bool IgnoreCertificateErrors { get; init; } = true;
 
     public IReadOnlyDictionary<string, string> LightIds { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+    public IReadOnlyList<string> ExcludedLightIds { get; init; } = [];
+
+    public IReadOnlyList<string> ExcludedLightAliases { get; init; } = [];
 }
 
 public sealed class LocalSamsungTvOptions

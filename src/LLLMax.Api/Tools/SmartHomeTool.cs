@@ -17,7 +17,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
 
     public override string Name => "smart_home";
 
-    public override string Description => "Control configured smart-home devices on the local network. For Philips Hue, use device=lights, operation=on/off, and target=all to turn every configured light on or off. For Samsung TV, use device=tv with operation=on/off/toggle_power/mute.";
+    public override string Description => "Control configured smart-home devices on the local network. For Philips Hue, use device=lights, operation=on/off, and target=all to turn every configured non-excluded light on or off. For Samsung TV, use device=tv with operation=on/off/toggle_power/mute.";
 
     protected override async Task<LocalToolResult> InvokeAsync(SmartHomeArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
@@ -72,7 +72,10 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
             await SendHueRequestAsync(multiRequest, cancellationToken);
         }
 
-        return new LocalToolResult($"Hue lights turned {(on ? "on" : "off")}.");
+        var excludedCount = CountExcludedConfiguredLights(hue);
+        var exclusionNote = excludedCount == 0 ? string.Empty : $" Excluded {excludedCount} protected light(s).";
+
+        return new LocalToolResult($"Hue lights turned {(on ? "on" : "off")}.{exclusionNote}");
     }
 
     private async Task SendHueRequestAsync(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -112,21 +115,49 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
                 throw new InvalidOperationException("No Hue light IDs are configured.");
             }
 
-            return hue.LightIds.Values.ToList();
+            var lightIds = hue.LightIds
+                .Where(pair => !IsExcludedHueLight(hue, pair.Key, pair.Value))
+                .Select(pair => pair.Value)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+
+            if (lightIds.Count == 0)
+            {
+                throw new InvalidOperationException("No non-excluded Hue light IDs are configured.");
+            }
+
+            return lightIds;
         }
 
         if (hue.LightIds.TryGetValue(target, out var configuredId))
         {
+            ThrowIfExcludedHueLight(hue, target, configuredId);
             return [configuredId];
         }
 
         if (Guid.TryParse(target, out _))
         {
+            ThrowIfExcludedHueLight(hue, target, target);
             return [target];
         }
 
         throw new InvalidOperationException($"Hue light '{target}' is not configured.");
     }
+
+    private static void ThrowIfExcludedHueLight(LocalHueOptions hue, string alias, string lightId)
+    {
+        if (IsExcludedHueLight(hue, alias, lightId))
+        {
+            throw new InvalidOperationException($"Hue light '{alias}' is excluded from smart_home control.");
+        }
+    }
+
+    private static bool IsExcludedHueLight(LocalHueOptions hue, string alias, string lightId) =>
+        hue.ExcludedLightAliases.Contains(alias, StringComparer.OrdinalIgnoreCase)
+        || hue.ExcludedLightIds.Contains(lightId, StringComparer.OrdinalIgnoreCase);
+
+    private static int CountExcludedConfiguredLights(LocalHueOptions hue) =>
+        hue.LightIds.Count(pair => IsExcludedHueLight(hue, pair.Key, pair.Value));
 
     private async Task<LocalToolResult> InvokeSamsungTvAsync(string operation, CancellationToken cancellationToken)
     {
@@ -151,19 +182,85 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
                 }
 
                 await SendWakeOnLanAsync(tv.MacAddress, tv.WakePort, cancellationToken);
-                return new LocalToolResult("Samsung TV wake packet sent.");
+                return await SamsungTvPowerResultAsync(tv, "wake packet sent", "on", cancellationToken);
             case "off" or "turn_off":
                 await SendSamsungTvKeyAsync(tv, "KEY_POWER", cancellationToken);
-                return new LocalToolResult("Samsung TV power-off command sent.");
+                return await SamsungTvPowerResultAsync(tv, "power command sent", "off", cancellationToken);
             case "power" or "toggle_power" or "toggle":
                 await SendSamsungTvKeyAsync(tv, "KEY_POWER", cancellationToken);
-                return new LocalToolResult("Samsung TV power-toggle command sent.");
+                return new LocalToolResult("Samsung TV power-toggle command sent. TV power state was not verified.");
             case "mute" or "unmute" or "toggle_mute":
                 await SendSamsungTvKeyAsync(tv, "KEY_MUTE", cancellationToken);
                 return new LocalToolResult("Samsung TV mute-toggle command sent. Samsung exposes mute as a toggle, so mute and unmute use the same command.");
             default:
                 throw new ArgumentException("Samsung TV operation must be on, off, toggle_power, or mute.");
         }
+    }
+
+    private async Task<LocalToolResult> SamsungTvPowerResultAsync(LocalSamsungTvOptions tv, string commandDescription, string requestedState, CancellationToken cancellationToken)
+    {
+        var observedState = await WaitForSamsungTvPowerStateAsync(tv, requestedState, cancellationToken);
+
+        if (requestedState.Equals("on", StringComparison.OrdinalIgnoreCase))
+        {
+            return observedState?.Equals("on", StringComparison.OrdinalIgnoreCase) == true
+                ? new LocalToolResult("Samsung TV wake packet sent and PowerState is on.")
+                : new LocalToolResult($"Samsung TV {commandDescription}, but PowerState was not verified as on. Observed PowerState: {observedState ?? "unreachable"}.");
+        }
+
+        return observedState?.Equals("on", StringComparison.OrdinalIgnoreCase) == false
+            ? new LocalToolResult($"Samsung TV {commandDescription} and PowerState is {observedState}.")
+            : new LocalToolResult($"Samsung TV {commandDescription}, but PowerState was not verified as off. Observed PowerState: {observedState ?? "unreachable"}.");
+    }
+
+    private async Task<string?> WaitForSamsungTvPowerStateAsync(LocalSamsungTvOptions tv, string requestedState, CancellationToken cancellationToken)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(Math.Max(1, _options.SmartHome.RequestTimeoutSeconds));
+        string? lastState = null;
+
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            lastState = await GetSamsungTvPowerStateAsync(tv, cancellationToken);
+
+            if (requestedState.Equals("on", StringComparison.OrdinalIgnoreCase))
+            {
+                if (lastState?.Equals("on", StringComparison.OrdinalIgnoreCase) == true)
+                {
+                    return lastState;
+                }
+            }
+            else if (lastState is not null && !lastState.Equals("on", StringComparison.OrdinalIgnoreCase))
+            {
+                return lastState;
+            }
+
+            await Task.Delay(500, cancellationToken);
+        }
+
+        return lastState;
+    }
+
+    private async Task<string?> GetSamsungTvPowerStateAsync(LocalSamsungTvOptions tv, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var uri = new UriBuilder("http", tv.Host, tv.RemotePort, "/api/v2/").Uri;
+            var json = await httpClientFactory.CreateClient("smart-home-hue").GetStringAsync(uri, cancellationToken);
+            using var document = JsonDocument.Parse(json);
+
+            if (document.RootElement.TryGetProperty("device", out var device)
+                && device.TryGetProperty("PowerState", out var powerState)
+                && powerState.GetString() is { Length: > 0 } parsed)
+            {
+                return parsed;
+            }
+        }
+        catch (Exception exception) when (exception is HttpRequestException or TaskCanceledException or JsonException)
+        {
+            return null;
+        }
+
+        return null;
     }
 
     private async Task SendSamsungTvKeyAsync(LocalSamsungTvOptions tv, string key, CancellationToken cancellationToken)
@@ -194,7 +291,22 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
         }, JsonOptions);
 
         await socket.SendAsync(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, true, timeout.Token);
-        await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", timeout.Token);
+
+        if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
+        {
+            try
+            {
+                await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", timeout.Token);
+            }
+            catch (WebSocketException)
+            {
+                // Samsung TVs often abort immediately after accepting a remote key.
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                // Closing is best-effort after the key has been sent.
+            }
+        }
     }
 
     private static async Task SendWakeOnLanAsync(string macAddress, int port, CancellationToken cancellationToken)

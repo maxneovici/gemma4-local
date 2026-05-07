@@ -205,6 +205,7 @@ Recent conversation:
     private ToolUseDecision Validate(ToolUsePlanningRequest request, RouterDecisionDto decision)
     {
         var tools = Array.Empty<string>();
+        var isSmartHomeCommand = IsSmartHomeCommand(request.Message.ToLowerInvariant());
         var policy = NormalizePolicy(decision.ToolPolicy, request.Message);
         var responseMode = decision.ResponseMode?.Equals(ResponseModes.VoiceConversation, StringComparison.OrdinalIgnoreCase) == true
             ? ResponseModes.VoiceConversation
@@ -216,7 +217,7 @@ Recent conversation:
             SuggestedTools: tools,
             Intent: string.IsNullOrWhiteSpace(decision.Intent) ? "unknown" : decision.Intent.Trim(),
             ResponseMode: responseMode,
-            Model: null,
+            Model: isSmartHomeCommand ? _options.ModelRouter.InteractiveModel : null,
             ReasoningEffort: NormalizeEffort(decision.ReasoningEffort),
             Temperature: Math.Clamp(decision.Temperature ?? 0.4, 0, 1),
             Confidence: Math.Clamp(decision.Confidence ?? 0, 0, 1));
@@ -262,7 +263,7 @@ Recent conversation:
     }
 
     private static bool IsSmartHomeCommand(string lower) =>
-        (lower.Contains("turn on") || lower.Contains("turn off") || lower.Contains("switch on") || lower.Contains("switch off") || lower.Contains("mute") || lower.Contains("unmute"))
+        (lower.Contains("turn on") || lower.Contains("turn off") || lower.Contains("switch on") || lower.Contains("switch off") || lower.Contains(" on") || lower.Contains(" off") || lower.Contains("mute") || lower.Contains("unmute"))
         && (lower.Contains("light") || lower.Contains("lights") || lower.Contains("lamp") || lower.Contains("lamps") || lower.Contains("tv"));
 
     private static string NormalizeEffort(string? effort) =>
