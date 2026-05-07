@@ -23,6 +23,11 @@ public sealed record MemoryCountRequest(
     string Collection,
     IReadOnlyDictionary<string, string>? Filter = null);
 
+public sealed record MemoryCollectionInspectRequest(
+    int Limit = 20,
+    string? Cursor = null,
+    IReadOnlyDictionary<string, string>? Filter = null);
+
 public sealed record MemoryRecord(
     string Id,
     string Collection,
@@ -45,3 +50,25 @@ public sealed record MemoryStatsResponse(
     IReadOnlyList<MemoryCollectionStats> Collections);
 
 public sealed record MemoryCollectionStats(string Name, int RecordCount);
+
+public sealed record MemoryCollectionDetail(
+    string Name,
+    int RecordCount,
+    string Provider,
+    string? Status = null,
+    int? VectorSize = null,
+    string? Distance = null);
+
+public sealed record MemoryCollectionDeleteResponse(string Name, bool Deleted);
+
+public sealed record MemoryCollectionRecordPreview(
+    string Id,
+    string TextPreview,
+    int TextLength,
+    IReadOnlyDictionary<string, string> Metadata);
+
+public sealed record MemoryCollectionInspectResponse(
+    string Collection,
+    int Count,
+    string? NextCursor,
+    IReadOnlyList<MemoryCollectionRecordPreview> Records);

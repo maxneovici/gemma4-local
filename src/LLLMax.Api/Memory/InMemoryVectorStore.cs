@@ -108,6 +108,59 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
             Collections: collections));
     }
 
+    public Task<IReadOnlyList<MemoryCollectionDetail>> ListCollectionsAsync(CancellationToken cancellationToken)
+    {
+        IReadOnlyList<MemoryCollectionDetail> details = _collections
+            .Select(pair => new MemoryCollectionDetail(pair.Key, pair.Value.Count, "InMemory"))
+            .OrderBy(collection => collection.Name)
+            .ToList();
+
+        return Task.FromResult(details);
+    }
+
+    public Task<MemoryCollectionDetail?> GetCollectionAsync(string collection, CancellationToken cancellationToken)
+    {
+        return Task.FromResult(_collections.TryGetValue(collection, out var records)
+            ? new MemoryCollectionDetail(collection, records.Count, "InMemory")
+            : null);
+    }
+
+    public Task<MemoryCollectionInspectResponse> InspectCollectionAsync(string collection, MemoryCollectionInspectRequest request, CancellationToken cancellationToken)
+    {
+        if (!_collections.TryGetValue(collection, out var records))
+        {
+            return Task.FromResult(new MemoryCollectionInspectResponse(collection, 0, null, []));
+        }
+
+        MemoryRecord[] snapshot;
+
+        lock (records)
+        {
+            snapshot = records.ToArray();
+        }
+
+        var offset = int.TryParse(request.Cursor, out var parsedCursor) ? Math.Max(0, parsedCursor) : 0;
+        var limit = Math.Clamp(request.Limit, 1, 100);
+        var filtered = snapshot
+            .Where(record => MatchesFilter(record.Metadata, request.Filter))
+            .ToList();
+        var page = filtered
+            .Skip(offset)
+            .Take(limit)
+            .Select(record => new MemoryCollectionRecordPreview(record.Id, CreatePreview(record.Text), record.Text.Length, record.Metadata))
+            .ToList();
+        var nextOffset = offset + page.Count;
+
+        return Task.FromResult(new MemoryCollectionInspectResponse(
+            collection,
+            filtered.Count,
+            nextOffset < filtered.Count ? nextOffset.ToString() : null,
+            page));
+    }
+
+    public Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken) =>
+        Task.FromResult(new MemoryCollectionDeleteResponse(collection, _collections.TryRemove(collection, out _)));
+
     private static double CosineSimilarity(float[] left, float[] right)
     {
         var length = Math.Min(left.Length, right.Length);
@@ -134,4 +187,10 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
         filter is null
         || filter.Count == 0
         || filter.All(pair => metadata.TryGetValue(pair.Key, out var value) && value.Equals(pair.Value, StringComparison.OrdinalIgnoreCase));
+
+    private static string CreatePreview(string text)
+    {
+        var compact = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= 420 ? compact : compact[..420] + "...";
+    }
 }

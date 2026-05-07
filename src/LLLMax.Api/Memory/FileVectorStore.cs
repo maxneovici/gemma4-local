@@ -176,6 +176,57 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
             Collections: collections);
     }
 
+    public async Task<IReadOnlyList<MemoryCollectionDetail>> ListCollectionsAsync(CancellationToken cancellationToken)
+    {
+        var stats = await GetStatsAsync(cancellationToken);
+        return stats.Collections
+            .Select(collection => new MemoryCollectionDetail(collection.Name, collection.RecordCount, "File"))
+            .ToList();
+    }
+
+    public async Task<MemoryCollectionDetail?> GetCollectionAsync(string collection, CancellationToken cancellationToken)
+    {
+        var records = await ReadCollectionAsync(collection, cancellationToken);
+        return records.Count == 0 && !File.Exists(GetCollectionPath(collection))
+            ? null
+            : new MemoryCollectionDetail(collection, records.Count, "File");
+    }
+
+    public async Task<MemoryCollectionInspectResponse> InspectCollectionAsync(string collection, MemoryCollectionInspectRequest request, CancellationToken cancellationToken)
+    {
+        var records = await ReadCollectionAsync(collection, cancellationToken);
+        var offset = int.TryParse(request.Cursor, out var parsedCursor) ? Math.Max(0, parsedCursor) : 0;
+        var limit = Math.Clamp(request.Limit, 1, 100);
+        var filtered = records
+            .Where(record => MatchesFilter(record.Metadata, request.Filter))
+            .ToList();
+        var page = filtered
+            .Skip(offset)
+            .Take(limit)
+            .Select(record => new MemoryCollectionRecordPreview(record.Id, CreatePreview(record.Text), record.Text.Length, record.Metadata))
+            .ToList();
+        var nextOffset = offset + page.Count;
+
+        return new MemoryCollectionInspectResponse(
+            collection,
+            filtered.Count,
+            nextOffset < filtered.Count ? nextOffset.ToString() : null,
+            page);
+    }
+
+    public Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken)
+    {
+        var file = GetCollectionPath(collection);
+
+        if (!File.Exists(file))
+        {
+            return Task.FromResult(new MemoryCollectionDeleteResponse(collection, false));
+        }
+
+        File.Delete(file);
+        return Task.FromResult(new MemoryCollectionDeleteResponse(collection, true));
+    }
+
     private SemaphoreSlim GetLock(string collection) =>
         _locks.GetOrAdd(collection, _ => new SemaphoreSlim(1, 1));
 
@@ -229,4 +280,10 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
         filter is null
         || filter.Count == 0
         || filter.All(pair => metadata.TryGetValue(pair.Key, out var value) && value.Equals(pair.Value, StringComparison.OrdinalIgnoreCase));
+
+    private static string CreatePreview(string text)
+    {
+        var compact = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= 420 ? compact : compact[..420] + "...";
+    }
 }

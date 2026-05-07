@@ -7,6 +7,10 @@ const state = {
   agents: [],
   taskGraph: null,
   backgroundJobs: [],
+  memoryCollections: [],
+  selectedCollection: null,
+  collectionInspectCursor: null,
+  collectionInspectFilter: {},
   consolidationJobs: [],
   approvals: [],
   mcpServers: []
@@ -196,6 +200,136 @@ async function loadMemoryStats() {
     <div class="runtime-pill"><span>collections</span><strong>${stats.collectionCount}</strong></div>
     <div class="runtime-pill"><span>records</span><strong>${stats.recordCount}</strong></div>
   `;
+  await loadMemoryCollections();
+}
+
+async function loadMemoryCollections() {
+  state.memoryCollections = await api('/memory/collections');
+  const selected = state.selectedCollection ?? state.memoryCollections[0]?.name ?? 'coordinator';
+  $('memoryCollectionSelect').innerHTML = state.memoryCollections.map(collection => `
+    <option value="${escapeHtml(collection.name)}" ${collection.name === selected ? 'selected' : ''}>${escapeHtml(collection.name)}</option>
+  `).join('') || '<option value="coordinator">coordinator</option>';
+  $('memoryCollections').innerHTML = state.memoryCollections.slice(0, 8).map(collection => `
+    <div class="collection-card">
+      <strong>${escapeHtml(collection.name)}</strong>
+      <span>${escapeHtml(collection.recordCount)} pts${collection.vectorSize ? ` · ${escapeHtml(collection.vectorSize)}d` : ''}${collection.distance ? ` · ${escapeHtml(collection.distance)}` : ''}</span>
+      <div class="button-row">
+        <button data-collection-detail="${escapeHtml(collection.name)}" type="button">Details</button>
+        <button data-inspect-collection="${escapeHtml(collection.name)}" type="button">Inspect</button>
+        <button data-delete-collection="${escapeHtml(collection.name)}" type="button">Delete</button>
+      </div>
+    </div>
+  `).join('') || '<p class="muted">No memory collections yet.</p>';
+
+  document.querySelectorAll('[data-collection-detail]').forEach(button => {
+    button.addEventListener('click', () => showCollectionDetail(button.dataset.collectionDetail));
+  });
+  document.querySelectorAll('[data-inspect-collection]').forEach(button => {
+    button.addEventListener('click', () => inspectCollection(button.dataset.inspectCollection));
+  });
+  document.querySelectorAll('[data-delete-collection]').forEach(button => {
+    button.addEventListener('click', () => deleteCollection(button.dataset.deleteCollection));
+  });
+}
+
+async function showCollectionDetail(name) {
+  const detail = await api(`/memory/collections/${encodeURIComponent(name)}`);
+  $('memoryResults').textContent = JSON.stringify(detail, null, 2);
+}
+
+async function inspectCollection(name, options = {}) {
+  await guarded(async () => {
+    if (options.reset !== false) {
+      state.collectionInspectCursor = null;
+    }
+
+    state.selectedCollection = name;
+    $('memoryCollectionSelect').value = name;
+    const filter = parseMetadataFilter($('collectionFilter')?.value ?? '');
+    state.collectionInspectFilter = filter;
+    const result = await api(`/memory/collections/${encodeURIComponent(name)}/inspect`, {
+      method: 'POST',
+      body: JSON.stringify({ limit: 12, cursor: options.cursor ?? state.collectionInspectCursor, filter })
+    });
+
+    state.collectionInspectCursor = result.nextCursor;
+    renderCollectionInspector(result, options.append === true);
+  }, `Inspecting ${name}...`, { overlay: false });
+}
+
+function renderCollectionInspector(result, append = false) {
+  const existing = append ? $('collectionRecords')?.innerHTML ?? '' : '';
+  $('collectionInspector').hidden = false;
+  $('collectionInspector').innerHTML = `
+    <div class="inspector-head">
+      <div>
+        <strong>${escapeHtml(result.collection)}</strong>
+        <span>${escapeHtml(result.count)} matching records · vectors hidden</span>
+      </div>
+      <button id="closeInspector" type="button">Close</button>
+    </div>
+    <div class="memory-inspector-controls">
+      <input id="collectionFilter" placeholder="metadata filter: tenant=personal category=contracts" value="${escapeHtml(formatMetadataFilter(state.collectionInspectFilter))}">
+      <button id="applyCollectionFilter" type="button">Filter</button>
+    </div>
+    <div id="collectionRecords" class="collection-records">
+      ${existing}${renderCollectionRecords(result.records)}
+    </div>
+    ${result.nextCursor ? '<button id="loadMoreCollectionRecords" type="button">Load more</button>' : ''}
+  `;
+
+  $('closeInspector').addEventListener('click', () => {
+    $('collectionInspector').hidden = true;
+  });
+  $('applyCollectionFilter').addEventListener('click', () => inspectCollection(result.collection));
+  $('collectionFilter').addEventListener('keydown', event => {
+    if (event.key === 'Enter') inspectCollection(result.collection);
+  });
+  $('loadMoreCollectionRecords')?.addEventListener('click', () => inspectCollection(result.collection, { reset: false, append: true, cursor: result.nextCursor }));
+}
+
+function renderCollectionRecords(records) {
+  return records.map(record => {
+    const metadata = Object.entries(record.metadata ?? {})
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`)
+      .join('');
+    return `
+      <article class="collection-record">
+        <div class="record-head"><code>${escapeHtml(record.id.slice(0, 12))}</code><span>${escapeHtml(record.textLength)} chars</span></div>
+        <p>${escapeHtml(record.textPreview || '(empty text)')}</p>
+        <div class="metadata-row">${metadata || '<span>no metadata</span>'}</div>
+      </article>
+    `;
+  }).join('') || '<p class="muted">No records matched this filter.</p>';
+}
+
+function parseMetadataFilter(input) {
+  return input
+    .split(/\s+/)
+    .map(part => part.trim())
+    .filter(Boolean)
+    .reduce((filter, part) => {
+      const separator = part.indexOf('=');
+
+      if (separator > 0 && separator < part.length - 1) {
+        filter[part.slice(0, separator)] = part.slice(separator + 1);
+      }
+
+      return filter;
+    }, {});
+}
+
+function formatMetadataFilter(filter) {
+  return Object.entries(filter ?? {}).map(([key, value]) => `${key}=${value}`).join(' ');
+}
+
+async function deleteCollection(name) {
+  if (!confirm(`Delete memory collection ${name}? This removes its vectors from the active store.`)) return;
+  await guarded(async () => {
+    await api(`/memory/collections/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    await Promise.all([loadMemoryStats(), loadMemoryCollections()]);
+  }, 'Deleting collection...');
 }
 
 async function loadConsolidationJobs() {
@@ -255,8 +389,26 @@ async function loadJobArtifacts(jobId) {
 
   const artifacts = await api(`/background-jobs/${jobId}/artifacts`);
   container.innerHTML = artifacts.map(artifact => `
-    <a href="/background-jobs/${escapeHtml(jobId)}/artifacts/${escapeHtml(artifact.id)}" target="_blank" rel="noreferrer">${escapeHtml(artifact.title)}</a>
+    <button data-view-artifact="${escapeHtml(jobId)}:${escapeHtml(artifact.id)}" type="button">${escapeHtml(artifact.title)}</button>
   `).join('');
+  container.querySelectorAll('[data-view-artifact]').forEach(button => {
+    button.addEventListener('click', () => viewArtifact(button.dataset.viewArtifact));
+  });
+}
+
+async function viewArtifact(value) {
+  const [jobId, artifactId] = value.split(':');
+  const response = await fetch(`/background-jobs/${encodeURIComponent(jobId)}/artifacts/${encodeURIComponent(artifactId)}`);
+
+  if (!response.ok) throw new Error(await response.text());
+
+  const content = await response.text();
+  $('artifactViewer').hidden = false;
+  $('artifactViewer').innerHTML = `
+    <div class="job-title"><strong>Artifact Preview</strong><button id="closeArtifact" type="button">Close</button></div>
+    <div class="markdown-body">${renderMarkdown(content)}</div>
+  `;
+  $('closeArtifact').addEventListener('click', () => { $('artifactViewer').hidden = true; });
 }
 
 async function loadTaskGraph() {
@@ -623,12 +775,36 @@ async function searchMemory() {
   await guarded(async () => {
     const query = $('memoryQuery').value.trim();
     if (!query) return;
+    const collection = $('memoryCollectionSelect').value || 'coordinator';
+    state.selectedCollection = collection;
+    const filter = parseMetadataFilter($('collectionFilter')?.value ?? '');
     const result = await api('/memory/search', {
       method: 'POST',
-      body: JSON.stringify({ collection: 'coordinator', query, limit: 5 })
+      body: JSON.stringify({ collection, query, limit: 8, filter })
     });
-    $('memoryResults').textContent = JSON.stringify(result, null, 2);
+    renderMemorySearchResults(collection, query, result);
   }, 'Searching memory...');
+}
+
+function renderMemorySearchResults(collection, query, results) {
+  $('memoryResults').innerHTML = `
+    <div class="search-summary"><strong>${escapeHtml(collection)}</strong><span>${escapeHtml(results.length)} semantic matches for ${escapeHtml(query)}</span></div>
+    <div class="collection-records">
+      ${results.map(result => {
+        const metadata = Object.entries(result.metadata ?? {})
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`)
+          .join('');
+        return `
+          <article class="collection-record">
+            <div class="record-head"><code>${escapeHtml(result.id.slice(0, 12))}</code><span>score ${escapeHtml(Number(result.score).toFixed(3))}</span></div>
+            <p>${escapeHtml(result.text || '(empty text)')}</p>
+            <div class="metadata-row">${metadata || '<span>no metadata</span>'}</div>
+          </article>
+        `;
+      }).join('') || '<p class="muted">No semantic matches.</p>'}
+    </div>
+  `;
 }
 
 async function consolidateSession() {

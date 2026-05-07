@@ -79,9 +79,12 @@
       <details class="panel-section" open>
         <summary>Memory</summary>
         <div id="memoryStats" class="memory-stats"></div>
+        <div id="memoryCollections" class="collection-list"></div>
+        <div id="collectionInspector" class="collection-inspector" hidden></div>
         <button id="consolidateSession" type="button">Consolidate session</button>
         <div id="consolidationJobs" class="job-list"></div>
         <div class="memory-search">
+          <select id="memoryCollectionSelect"></select>
           <input id="memoryQuery" placeholder="search local memory">
           <button id="searchMemory" type="button">Search</button>
         </div>
@@ -90,6 +93,7 @@
       <details class="panel-section" open>
         <summary>Background Jobs</summary>
         <div id="backgroundJobs" class="background-job-list"></div>
+        <div id="artifactViewer" class="artifact-viewer" hidden></div>
       </details>
       <details class="panel-section" open>
         <summary>Metrics</summary>

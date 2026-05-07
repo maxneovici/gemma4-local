@@ -19,8 +19,28 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
             return new LocalToolResult("No matching local memories found.");
         }
 
-        return new LocalToolResult(string.Join(Environment.NewLine, results.Select(result => $"[{result.Score:0.000}] {result.Text}")));
+        return new LocalToolResult(string.Join(Environment.NewLine + Environment.NewLine, results.Select(FormatResult)));
     }
+
+    private static string FormatResult(MemorySearchResult result)
+    {
+        var source = GetMetadata(result, "sourceFile") ?? GetMetadata(result, "source") ?? result.Id;
+        var chunk = GetMetadata(result, "chunkIndex");
+        var category = GetMetadata(result, "category");
+        var tenant = GetMetadata(result, "tenant");
+        var metadata = string.Join(", ", new[]
+        {
+            $"source={source}",
+            chunk is null ? null : $"chunk={chunk}",
+            category is null ? null : $"category={category}",
+            tenant is null ? null : $"tenant={tenant}"
+        }.Where(item => item is not null));
+
+        return $"[{result.Score:0.000}] {metadata}\n{result.Text}";
+    }
+
+    private static string? GetMetadata(MemorySearchResult result, string key) =>
+        result.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
 }
 
 public sealed record MemorySearchArguments(

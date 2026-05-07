@@ -35,6 +35,21 @@ public static class MemoryEndpoints
         group.MapGet("/stats", async (ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.GetStatsAsync(cancellationToken)));
 
+        group.MapGet("/collections", async (ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+            Results.Ok(await memoryStore.ListCollectionsAsync(cancellationToken)));
+
+        group.MapGet("/collections/{collection}", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            var detail = await memoryStore.GetCollectionAsync(collection, cancellationToken);
+            return detail is null ? Results.NotFound() : Results.Ok(detail);
+        });
+
+        group.MapPost("/collections/{collection}/inspect", async (string collection, MemoryCollectionInspectRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+            Results.Ok(await memoryStore.InspectCollectionAsync(collection, request, cancellationToken)));
+
+        group.MapDelete("/collections/{collection}", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+            Results.Ok(await memoryStore.DeleteCollectionAsync(collection, cancellationToken)));
+
         group.MapGet("/consolidation/jobs", async (IMemoryConsolidationService consolidation, CancellationToken cancellationToken) =>
             Results.Ok(await consolidation.ListJobsAsync(cancellationToken)));
 

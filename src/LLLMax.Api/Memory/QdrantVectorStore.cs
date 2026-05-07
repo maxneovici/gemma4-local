@@ -178,6 +178,98 @@ public sealed class QdrantVectorStore(
             Collections: stats);
     }
 
+    public async Task<IReadOnlyList<MemoryCollectionDetail>> ListCollectionsAsync(CancellationToken cancellationToken)
+    {
+        var response = await Client.GetAsync("/collections", cancellationToken);
+        await ThrowIfFailedAsync(response, "Qdrant collection list", cancellationToken);
+        var collections = await response.Content.ReadFromJsonAsync<QdrantCollectionsResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Qdrant returned an empty collections response.");
+        var details = new List<MemoryCollectionDetail>();
+
+        foreach (var collection in collections.Result.Collections.OrderBy(collection => collection.Name, StringComparer.OrdinalIgnoreCase))
+        {
+            var detail = await GetCollectionAsync(collection.Name, cancellationToken);
+
+            if (detail is not null)
+            {
+                details.Add(detail);
+            }
+        }
+
+        return details;
+    }
+
+    public async Task<MemoryCollectionDetail?> GetCollectionAsync(string collection, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCollection(collection);
+        var response = await Client.GetAsync($"/collections/{Uri.EscapeDataString(normalized)}", cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return null;
+        }
+
+        await ThrowIfFailedAsync(response, $"Qdrant collection lookup for {normalized}", cancellationToken);
+        var detail = await response.Content.ReadFromJsonAsync<QdrantCollectionDetailResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Qdrant returned an empty collection detail response.");
+        var vectorConfig = detail.Result.Config.Params.Vectors;
+
+        return new MemoryCollectionDetail(
+            Name: normalized,
+            RecordCount: detail.Result.PointsCount,
+            Provider: "Qdrant",
+            Status: detail.Result.Status,
+            VectorSize: vectorConfig.Size,
+            Distance: vectorConfig.Distance);
+    }
+
+    public async Task<MemoryCollectionInspectResponse> InspectCollectionAsync(string collection, MemoryCollectionInspectRequest request, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCollection(collection);
+
+        if (!await CollectionExistsAsync(normalized, cancellationToken))
+        {
+            return new MemoryCollectionInspectResponse(normalized, 0, null, []);
+        }
+
+        var limit = Math.Clamp(request.Limit, 1, 100);
+        var filter = BuildFilter(request.Filter);
+        var countResponse = await CountAsync(new MemoryCountRequest(normalized, request.Filter), cancellationToken);
+        var response = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(normalized)}/points/scroll", new QdrantScrollRequest(
+            Limit: limit,
+            WithPayload: true,
+            WithVector: false,
+            Offset: request.Cursor,
+            Filter: filter), JsonOptions, cancellationToken);
+
+        await ThrowIfFailedAsync(response, $"Qdrant scroll for {normalized}", cancellationToken);
+        var scroll = await response.Content.ReadFromJsonAsync<QdrantScrollResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Qdrant returned an empty scroll response.");
+        var records = scroll.Result.Points
+            .Select(point =>
+            {
+                var text = point.Payload.TryGetString("text") ?? string.Empty;
+                return new MemoryCollectionRecordPreview(point.Id, CreatePreview(text), text.Length, point.Payload.TryGetMetadata());
+            })
+            .ToList();
+
+        return new MemoryCollectionInspectResponse(normalized, countResponse.Count, scroll.Result.NextPageOffset?.ToString(), records);
+    }
+
+    public async Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCollection(collection);
+        var response = await Client.DeleteAsync($"/collections/{Uri.EscapeDataString(normalized)}", cancellationToken);
+
+        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            return new MemoryCollectionDeleteResponse(normalized, false);
+        }
+
+        await ThrowIfFailedAsync(response, $"Qdrant delete collection {normalized}", cancellationToken);
+        return new MemoryCollectionDeleteResponse(normalized, true);
+    }
+
     private async Task EnsureCollectionAsync(string collection, int vectorSize, CancellationToken cancellationToken)
     {
         if (await CollectionExistsAsync(collection, cancellationToken))
@@ -278,6 +370,17 @@ public sealed class QdrantVectorStore(
 
     private sealed record QdrantCollectionInfo([property: JsonPropertyName("name")] string Name);
 
+    private sealed record QdrantCollectionDetailResponse([property: JsonPropertyName("result")] QdrantCollectionDetail Result);
+
+    private sealed record QdrantCollectionDetail(
+        [property: JsonPropertyName("status")] string Status,
+        [property: JsonPropertyName("points_count")] int PointsCount,
+        [property: JsonPropertyName("config")] QdrantCollectionConfig Config);
+
+    private sealed record QdrantCollectionConfig([property: JsonPropertyName("params")] QdrantCollectionParams Params);
+
+    private sealed record QdrantCollectionParams([property: JsonPropertyName("vectors")] QdrantVectorParams Vectors);
+
     private sealed record QdrantCountRequest(
         [property: JsonPropertyName("exact")] bool Exact,
         [property: JsonPropertyName("filter")] QdrantFilter? Filter = null);
@@ -285,6 +388,29 @@ public sealed class QdrantVectorStore(
     private sealed record QdrantCountResponse([property: JsonPropertyName("result")] QdrantCountResult Result);
 
     private sealed record QdrantCountResult([property: JsonPropertyName("count")] int Count);
+
+    private sealed record QdrantScrollRequest(
+        [property: JsonPropertyName("limit")] int Limit,
+        [property: JsonPropertyName("with_payload")] bool WithPayload,
+        [property: JsonPropertyName("with_vector")] bool WithVector,
+        [property: JsonPropertyName("offset")] string? Offset = null,
+        [property: JsonPropertyName("filter")] QdrantFilter? Filter = null);
+
+    private sealed record QdrantScrollResponse([property: JsonPropertyName("result")] QdrantScrollResult Result);
+
+    private sealed record QdrantScrollResult(
+        [property: JsonPropertyName("points")] IReadOnlyList<QdrantScrollPoint> Points,
+        [property: JsonPropertyName("next_page_offset")] JsonElement? NextPageOffset);
+
+    private sealed record QdrantScrollPoint(
+        [property: JsonPropertyName("id")] string Id,
+        [property: JsonPropertyName("payload")] JsonElement Payload);
+
+    private static string CreatePreview(string text)
+    {
+        var compact = string.Join(' ', text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return compact.Length <= 420 ? compact : compact[..420] + "...";
+    }
 }
 
 file static class QdrantPayloadExtensions
