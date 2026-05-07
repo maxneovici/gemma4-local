@@ -77,16 +77,16 @@ public sealed class SafeShellCommandTool(IOptions<LocalAiOptions> options, IWebH
         var stdout = await stdoutTask;
         var stderr = await stderrTask;
         var result = $"""
-Command: {command}
-Working directory: {workingDirectory}
-Exit code: {process.ExitCode}
+            Command: {command}
+            Working directory: {workingDirectory}
+            Exit code: {process.ExitCode}
 
-STDOUT:
-{TrimOutput(stdout)}
+            STDOUT:
+            {TrimOutput(stdout)}
 
-STDERR:
-{TrimOutput(stderr)}
-""";
+            STDERR:
+            {TrimOutput(stderr)}
+            """;
 
         return new LocalToolResult(result);
     }

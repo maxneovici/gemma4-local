@@ -32,9 +32,9 @@ async function api(path, options = {}) {
   return text ? JSON.parse(text) : null;
 }
 
-async function guarded(action, label = 'working') {
+async function guarded(action, label = 'working', options = {}) {
   setStatus(label, 'busy');
-  setWorking(true, label);
+  setWorking(options.overlay !== false, label);
   try {
     const result = await action();
     setStatus('Ready', 'ok');
@@ -58,10 +58,20 @@ function setWorking(isWorking, label = '') {
 }
 
 function renderMessages(messages) {
-  $('messages').innerHTML = messages.map(message => `
-    <div class="message ${message.role}">${escapeHtml(message.content)}</div>
-  `).join('');
+  clearInlineProgress();
+  $('messages').innerHTML = messages.filter(message => message.role !== 'progress').map(renderMessage).join('');
   $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+function renderMessage(message) {
+  const role = message.role === 'user' ? 'user' : 'assistant';
+  const raw = message.content ?? '';
+
+  if (role === 'user') {
+    return `<div class="message user" data-raw="${escapeHtml(raw)}">${escapeHtml(raw)}</div>`;
+  }
+
+  return `<div class="message assistant" data-raw="${escapeHtml(raw)}"><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
 }
 
 function renderRuntime(health) {
@@ -270,7 +280,9 @@ async function sendMessage(event) {
     if (!state.sessionId) await newSession();
     $('prompt').value = '';
     $('sendButton').disabled = true;
-    renderMessages([...documentMessages(), { role: 'user', content: message }, { role: 'assistant', content: '' }]);
+    const existingMessages = documentMessages();
+    renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
+    setInlineProgress('Routing request...');
 
     const result = await streamChat(`/sessions/${state.sessionId}/chat/stream`, {
       method: 'POST',
@@ -288,7 +300,10 @@ async function sendMessage(event) {
     renderMetrics(result.metrics);
     renderSteps(result.reasoningSteps);
     await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
-  }, 'Thinking...').finally(() => $('sendButton').disabled = false);
+  }, 'Thinking...', { overlay: false }).finally(() => {
+    clearInlineProgress();
+    $('sendButton').disabled = false;
+  });
 }
 
 async function streamChat(path, options) {
@@ -317,12 +332,12 @@ async function streamChat(path, options) {
       if (!event) continue;
 
       if (event.type === 'chunk' && event.content) {
+        clearInlineProgress();
         appendAssistantChunk(event.content);
       }
 
       if (event.type === 'progress' && event.content) {
-        setStatus(event.content, 'busy');
-        setWorking(true, event.content);
+        setInlineProgress(event.content);
       }
 
       if (event.type === 'task_graph' && event.payload) {
@@ -331,6 +346,7 @@ async function streamChat(path, options) {
       }
 
       if (event.type === 'final') {
+        clearInlineProgress();
         finalResult = event.result;
       }
 
@@ -359,15 +375,138 @@ function appendAssistantChunk(content) {
 
   if (!target) return;
 
-  target.textContent += content;
+  target.dataset.raw = (target.dataset.raw ?? '') + content;
+  target.querySelector('.markdown-body').innerHTML = renderMarkdown(target.dataset.raw);
   messages.scrollTop = messages.scrollHeight;
+}
+
+function setInlineProgress(content) {
+  const messages = $('messages');
+  let progress = $('inlineProgress');
+
+  if (!progress) {
+    progress = document.createElement('div');
+    progress.id = 'inlineProgress';
+    progress.className = 'inline-progress';
+    progress.innerHTML = '<span class="inline-spinner"></span><span class="inline-progress-text"></span>';
+    messages.appendChild(progress);
+  }
+
+  progress.querySelector('.inline-progress-text').textContent = content || 'Thinking...';
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function clearInlineProgress() {
+  $('inlineProgress')?.remove();
 }
 
 function documentMessages() {
   return [...document.querySelectorAll('.message')].map(element => ({
     role: element.classList.contains('user') ? 'user' : 'assistant',
-    content: element.textContent
+    content: element.dataset.raw ?? element.textContent
   }));
+}
+
+function renderMarkdown(markdown) {
+  const codeBlocks = [];
+  const escaped = escapeHtml(markdown ?? '').replace(/```([\s\S]*?)```/g, (_, code) => {
+    const token = `@@CODE_BLOCK_${codeBlocks.length}@@`;
+    codeBlocks.push(`<pre><code>${code.replace(/^\n|\n$/g, '')}</code></pre>`);
+    return token;
+  });
+  const lines = escaped.split('\n');
+  const html = [];
+  let paragraph = [];
+  let list = null;
+
+  const closeParagraph = () => {
+    if (paragraph.length) {
+      html.push(`<p>${paragraph.join('<br>')}</p>`);
+      paragraph = [];
+    }
+  };
+  const closeList = () => {
+    if (list) {
+      html.push(`</${list}>`);
+      list = null;
+    }
+  };
+
+  for (const line of lines) {
+    if (line.startsWith('@@CODE_BLOCK_')) {
+      closeParagraph();
+      closeList();
+      html.push(codeBlocks[Number(line.match(/@@CODE_BLOCK_(\d+)@@/)?.[1] ?? 0)] ?? '');
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeParagraph();
+      closeList();
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,3})\s+(.+)$/);
+    if (heading) {
+      closeParagraph();
+      closeList();
+      html.push(`<h${heading[1].length}>${renderInlineMarkdown(heading[2])}</h${heading[1].length}>`);
+      continue;
+    }
+
+    const unordered = line.match(/^\s*[-*]\s+(.+)$/);
+    if (unordered) {
+      closeParagraph();
+      if (list !== 'ul') {
+        closeList();
+        list = 'ul';
+        html.push('<ul>');
+      }
+      html.push(`<li>${renderInlineMarkdown(unordered[1])}</li>`);
+      continue;
+    }
+
+    const ordered = line.match(/^\s*\d+\.\s+(.+)$/);
+    if (ordered) {
+      closeParagraph();
+      if (list !== 'ol') {
+        closeList();
+        list = 'ol';
+        html.push('<ol>');
+      }
+      html.push(`<li>${renderInlineMarkdown(ordered[1])}</li>`);
+      continue;
+    }
+
+    closeList();
+    paragraph.push(renderInlineMarkdown(line));
+  }
+
+  closeParagraph();
+  closeList();
+  return html.join('');
+}
+
+function renderInlineMarkdown(value) {
+  const code = [];
+  let html = value.replace(/`([^`]+)`/g, (_, content) => {
+    const token = `@@CODE_${code.length}@@`;
+    code.push(`<code>${content}</code>`);
+    return token;
+  });
+
+  html = html.replace(/\[([^\]]+)\]\(([^\s)]+)\)/g, (_, text, url) => {
+    const normalized = url.replaceAll('&amp;', '&');
+    if (!/^(https?:\/\/|\/)/i.test(normalized)) {
+      return text;
+    }
+
+    return `<a href="${escapeHtml(normalized)}" target="_blank" rel="noreferrer">${text}</a>`;
+  });
+  html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+  html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+
+  return html.replace(/@@CODE_(\d+)@@/g, (_, index) => code[Number(index)] ?? '');
 }
 
 async function uploadDocument() {

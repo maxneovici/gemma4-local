@@ -110,9 +110,25 @@ button:disabled { cursor: progress; opacity: 0.62; }
 select, input { padding: 0.65rem 0.7rem; }
 
 .messages { min-height: 0; overflow: auto; padding: 1rem; display: flex; flex-direction: column; gap: 0.85rem; }
-.message { max-width: min(820px, 92%); padding: 0.9rem 1rem; border: 1px solid var(--line); border-radius: 14px; white-space: pre-wrap; line-height: 1.5; font-size: 0.9rem; }
+.message { max-width: min(820px, 92%); padding: 0.9rem 1rem; border: 1px solid var(--line); border-radius: 14px; white-space: normal; line-height: 1.5; font-size: 0.9rem; }
 .message.user { align-self: flex-end; background: rgba(56, 189, 248, 0.09); border-color: rgba(20, 184, 166, 0.26); }
 .message.assistant { align-self: flex-start; background: var(--panel-strong); }
+.message.user { white-space: pre-wrap; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body p { margin: 0.45rem 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3 { margin: 0.75rem 0 0.35rem; line-height: 1.2; letter-spacing: -0.04em; }
+.markdown-body h1 { font-size: 1.16rem; }
+.markdown-body h2 { font-size: 1.04rem; color: var(--accent); }
+.markdown-body h3 { font-size: 0.96rem; color: var(--accent-2); }
+.markdown-body ul, .markdown-body ol { margin: 0.45rem 0; padding-left: 1.35rem; }
+.markdown-body li { margin: 0.25rem 0; }
+.markdown-body code { color: var(--accent); background: rgba(56, 189, 248, 0.08); border: 1px solid rgba(56, 189, 248, 0.14); border-radius: 6px; padding: 0.08rem 0.28rem; }
+.markdown-body pre { margin: 0.65rem 0; max-height: none; padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: rgba(4, 4, 6, 0.7); white-space: pre-wrap; }
+.markdown-body pre code { display: block; padding: 0; border: 0; background: transparent; color: #d7f3ff; }
+.markdown-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(56, 189, 248, 0.32); }
+.inline-progress { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.55rem; max-width: min(820px, 92%); padding: 0.65rem 0.85rem; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 999px; background: rgba(8, 8, 9, 0.74); color: var(--muted); font-size: 0.78rem; }
+.inline-spinner { width: 0.72rem; height: 0.72rem; border-radius: 999px; border: 2px solid rgba(56, 189, 248, 0.18); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
 
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; padding: 1rem; border-top: 1px solid var(--line); background: rgba(7, 7, 8, 0.55); }
 textarea { width: 100%; resize: vertical; padding: 0.9rem; min-height: 74px; }
@@ -164,6 +180,10 @@ pre { overflow: auto; max-height: 170px; color: #cfcfcf; font-size: 0.72rem; }
   0% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0.55); }
   70% { box-shadow: 0 0 0 10px rgba(56, 189, 248, 0); }
   100% { box-shadow: 0 0 0 0 rgba(56, 189, 248, 0); }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 @media (max-width: 1180px) {
