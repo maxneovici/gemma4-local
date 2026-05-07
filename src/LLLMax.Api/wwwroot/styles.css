@@ -142,8 +142,11 @@ select, input { padding: 0.65rem 0.7rem; }
 .markdown-body pre { margin: 0.65rem 0; max-height: none; padding: 0.8rem; border: 1px solid var(--line); border-radius: 12px; background: rgba(4, 4, 6, 0.7); white-space: pre-wrap; }
 .markdown-body pre code { display: block; padding: 0; border: 0; background: transparent; color: #d7f3ff; }
 .markdown-body a { color: var(--accent); text-decoration: none; border-bottom: 1px solid rgba(56, 189, 248, 0.32); }
-.inline-progress { align-self: flex-start; display: inline-flex; align-items: center; gap: 0.55rem; max-width: min(820px, 92%); padding: 0.65rem 0.85rem; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 999px; background: rgba(8, 8, 9, 0.74); color: var(--muted); font-size: 0.78rem; }
+.inline-progress { align-self: flex-start; display: inline-flex; align-items: flex-start; gap: 0.55rem; max-width: min(820px, 92%); padding: 0.65rem 0.85rem; border: 1px solid rgba(56, 189, 248, 0.2); border-radius: 14px; background: rgba(8, 8, 9, 0.74); color: var(--muted); font-size: 0.78rem; }
 .inline-spinner { width: 0.72rem; height: 0.72rem; border-radius: 999px; border: 2px solid rgba(56, 189, 248, 0.18); border-top-color: var(--accent); animation: spin 0.8s linear infinite; }
+.inline-progress-stack { display: grid; gap: 0.2rem; }
+.inline-progress-text { color: rgba(231, 231, 231, 0.56); }
+.inline-progress-text.current { color: var(--text); }
 
 .composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.75rem; padding: 1rem; border-top: 1px solid var(--line); background: rgba(7, 7, 8, 0.55); }
 textarea { width: 100%; resize: vertical; padding: 0.9rem; min-height: 74px; }
@@ -163,7 +166,8 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .runtime-pill span, .metric span { display: block; color: var(--muted); font-size: 0.7rem; }
 .runtime-pill strong, .metric strong { display: block; margin-top: 0.2rem; font-size: 0.98rem; }
 .panel-help { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
-.memory-search { display: grid; grid-template-columns: 0.9fr 1.1fr auto; gap: 0.5rem; margin-top: 0.65rem; }
+.memory-search { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 0.5rem; margin-top: 0.65rem; }
+.memory-search button { grid-column: 1 / -1; }
 .memory-add { margin-top: 0.55rem; border: 1px solid var(--line); border-radius: 11px; padding: 0.5rem 0.6rem; background: rgba(8, 8, 9, 0.35); }
 .memory-add summary { cursor: pointer; color: var(--accent); font-size: 0.76rem; }
 .memory-add textarea, .memory-add input, .memory-add button { width: 100%; margin-top: 0.5rem; }

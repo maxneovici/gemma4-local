@@ -46,6 +46,9 @@ public sealed class AgentRuntime(
         var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
         reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}; delegationDepth={delegationDepth}", DateTimeOffset.UtcNow));
+        await PublishAsync(request, new AgentRuntimeEvent(
+            Kind: "model_started",
+            Content: delegationDepth > 0 ? $"{agent.Name} is working on the delegated task..." : $"Thinking with {route.Model}..."), cancellationToken);
 
         var messages = BuildInitialMessages(request, prompt);
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
@@ -57,6 +60,9 @@ public sealed class AgentRuntime(
 
             if (ShouldUseNativeToolCalling(request.AllowTools, allowedTools))
             {
+                await PublishAsync(request, new AgentRuntimeEvent(
+                    Kind: "model_started",
+                    Content: iteration == 0 ? "Choosing the next step..." : "Summarizing tool results..."), cancellationToken);
                 var nativeResponse = await nativeToolChatClient.ChatAsync(new NativeToolChatRequest(
                     Model: route.Model,
                     Messages: messages,
@@ -81,6 +87,9 @@ public sealed class AgentRuntime(
             }
             else
             {
+                await PublishAsync(request, new AgentRuntimeEvent(
+                    Kind: "model_started",
+                    Content: iteration == 0 ? "Choosing the next step..." : "Summarizing tool results..."), cancellationToken);
                 response = await chatClient.ChatAsync(new LocalChatRequest(
                     Model: route.Model,
                     Messages: messages,
@@ -134,7 +143,7 @@ public sealed class AgentRuntime(
             toolTraces.Add(new ToolTraceEntry(tool.Name, "running", traceArguments, null, null, startedAt));
             await PublishAsync(request, new AgentRuntimeEvent(
                 Kind: "tool_started",
-                Content: $"Calling {tool.Name}...",
+                Content: DescribeToolStart(tool.Name, traceArguments),
                 Tool: tool.Name,
                 Arguments: traceArguments), cancellationToken);
 
@@ -185,7 +194,7 @@ public sealed class AgentRuntime(
             reasoningSteps.Add(new ReasoningStep("tool_result", result.Content, DateTimeOffset.UtcNow));
             await PublishAsync(request, new AgentRuntimeEvent(
                 Kind: "tool_completed",
-                Content: $"{tool.Name} completed.",
+                Content: DescribeToolCompleted(tool.Name),
                 Tool: tool.Name,
                 Result: result.Content), cancellationToken);
             messages = AppendToolResult(messages, response.Response, tool.Name, result.Content);
@@ -217,6 +226,58 @@ public sealed class AgentRuntime(
 
     private static string CitationKey(CitationSource citation) =>
         $"{citation.Kind}\u001f{citation.Url}\u001f{citation.Source}\u001f{citation.Chunk}\u001f{citation.Title}";
+
+    private static string DescribeToolStart(string toolName, IReadOnlyDictionary<string, string> arguments) =>
+        toolName switch
+        {
+            "memory_search" => $"Searching memory for {Quote(arguments.GetValueOrDefault("query"))}...",
+            "web_browse" => $"Checking {DisplayUrl(arguments.GetValueOrDefault("url"))}...",
+            "delegate_to_agent" => $"Delegating to {arguments.GetValueOrDefault("agent") ?? "another agent"}...",
+            "schedule_background_job" => $"Scheduling {arguments.GetValueOrDefault("kind") ?? "background work"}...",
+            "document_vectorize_folder" => $"Vectorizing {arguments.GetValueOrDefault("folderPath") ?? "folder"}...",
+            "ocr_document" => "Reading document with OCR...",
+            "extract_invoice" => "Extracting invoice fields...",
+            "api_integration" => "Calling registered API...",
+            "workspace_search" => $"Searching workspace for {Quote(arguments.GetValueOrDefault("query"))}...",
+            "workspace_read" => $"Reading {arguments.GetValueOrDefault("path") ?? "workspace file"}...",
+            "workspace_write" => $"Preparing write to {arguments.GetValueOrDefault("path") ?? "workspace file"}...",
+            "git_inspect" => "Inspecting git state...",
+            "propose_patch" => "Preparing patch proposal...",
+            _ when toolName.StartsWith("mcp_", StringComparison.OrdinalIgnoreCase) => $"Calling MCP tool {toolName}...",
+            _ => $"Calling {toolName}..."
+        };
+
+    private static string DescribeToolCompleted(string toolName) =>
+        toolName switch
+        {
+            "memory_search" => "Memory search complete. Reviewing matches...",
+            "web_browse" => "Page fetched. Reading the content...",
+            "delegate_to_agent" => "Delegated work complete. Reviewing result...",
+            "schedule_background_job" => "Background job scheduled.",
+            "document_vectorize_folder" => "Vectorization complete. Reviewing result...",
+            "ocr_document" => "OCR complete. Reviewing text...",
+            "extract_invoice" => "Invoice extraction complete. Reviewing fields...",
+            "api_integration" => "API call complete. Reviewing response...",
+            "workspace_search" => "Workspace search complete. Reviewing matches...",
+            "workspace_read" => "File read complete. Reviewing content...",
+            "workspace_write" => "Workspace write submitted. Reviewing result...",
+            "git_inspect" => "Git inspection complete. Reviewing state...",
+            "propose_patch" => "Patch proposal saved. Reviewing result...",
+            _ => $"{toolName} complete. Reviewing result..."
+        };
+
+    private static string DisplayUrl(string? value)
+    {
+        if (Uri.TryCreate(value, UriKind.Absolute, out var uri))
+        {
+            return uri.Host;
+        }
+
+        return string.IsNullOrWhiteSpace(value) ? "the page" : value;
+    }
+
+    private static string Quote(string? value) =>
+        string.IsNullOrWhiteSpace(value) ? "relevant context" : $"\"{value}\"";
 
     private static Task PublishAsync(AgentRunRequest request, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
         request.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;

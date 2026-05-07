@@ -20,7 +20,10 @@ const state = {
   consolidationJobs: [],
   approvals: [],
   mcpServers: [],
-  patchProposals: []
+  patchProposals: [],
+  currentMessages: [],
+  isStreaming: false,
+  activeAssistantId: null
 };
 
 let knownJobStates = new Map();
@@ -74,8 +77,9 @@ function setWorking(isWorking, label = '') {
 function renderMessages(messages) {
   clearInlineProgress();
   const previousTraceId = state.selectedTraceId;
+  state.currentMessages = messages.filter(message => message.role !== 'progress');
   state.messageTraces = new Map();
-  $('messages').innerHTML = messages.filter(message => message.role !== 'progress').map((message, index) => renderMessage(message, index)).join('');
+  $('messages').innerHTML = state.currentMessages.map((message, index) => renderMessage(message, index)).join('');
   document.querySelectorAll('[data-trace-id]').forEach(element => {
     element.addEventListener('click', () => selectMessageTrace(element.dataset.traceId));
   });
@@ -92,6 +96,7 @@ function renderMessages(messages) {
 function renderMessage(message, index) {
   const role = message.role === 'user' ? 'user' : 'assistant';
   const raw = message.content ?? '';
+  const draftAttribute = message.draftId ? ` data-draft-id="${escapeHtml(message.draftId)}"` : '';
 
   if (role === 'user') {
     return `<div class="message user" data-raw="${escapeHtml(raw)}">${escapeHtml(raw)}</div>`;
@@ -100,7 +105,7 @@ function renderMessage(message, index) {
   const hasTrace = Boolean(message.reasoningSteps?.length || message.taskGraph || message.toolTraces?.length || message.citations?.length);
 
   if (!hasTrace) {
-    return `<div class="message assistant" data-raw="${escapeHtml(raw)}"><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
+    return `<div class="message assistant" data-raw="${escapeHtml(raw)}"${draftAttribute}><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
   }
 
   const traceId = message.traceId ?? `message-${index}`;
@@ -112,14 +117,15 @@ function renderMessage(message, index) {
     citations: message.citations ?? []
   });
 
-  return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"><div class="markdown-body">${renderMarkdown(raw)}</div>${renderMessageCitations(message.citations ?? [])}${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
+  return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"${draftAttribute}><div class="markdown-body">${renderMarkdown(raw)}</div>${renderMessageCitations(message.citations ?? [])}${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
 }
 
 function renderMessageCitations(citations) {
-  return citations?.length
-    ? `<div class="message-citations"><span>Sources</span>${citations.map(citation => citation.url
-      ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>`
-      : `<code>${escapeHtml(citation.title)}</code>`).join('')}</div>`
+  const visible = visibleCitations(citations);
+  return visible.length
+    ? `<div class="message-citations"><span>Sources</span>${visible.map(citation => citation.url
+      ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citationLabel(citation))}</a>`
+      : `<code>${escapeHtml(citationLabel(citation))}</code>`).join('')}</div>`
     : '';
 }
 
@@ -201,17 +207,48 @@ function renderToolTraces(toolTraces) {
 }
 
 function renderCitations(citations) {
-  $('citations').innerHTML = citations?.length
-    ? citations.map(citation => {
+  const visible = visibleCitations(citations);
+  $('citations').innerHTML = visible.length
+    ? visible.map(citation => {
       const title = citation.url
-        ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>`
-        : escapeHtml(citation.title);
+        ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citationLabel(citation))}</a>`
+        : escapeHtml(citationLabel(citation));
       const detail = [citation.kind, citation.source, citation.chunk ? `chunk ${citation.chunk}` : null, citation.score ? `score ${Number(citation.score).toFixed(3)}` : null]
         .filter(Boolean)
         .join(' · ');
       return `<div class="citation"><strong>${title}</strong><span>${escapeHtml(detail)}</span></div>`;
     }).join('')
     : '<p class="muted">No citations recorded for this message.</p>';
+}
+
+function visibleCitations(citations = []) {
+  const seen = new Set();
+  return citations
+    .filter(citation => citation?.url || citation?.source || citation?.kind === 'web' || !isGuidLike(citation?.title))
+    .filter(citation => {
+      const key = `${citation.kind}|${citation.url ?? ''}|${citation.source ?? ''}|${citation.chunk ?? ''}|${citationLabel(citation)}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+}
+
+function citationLabel(citation) {
+  if (citation.url) {
+    try {
+      return new URL(citation.url).hostname.replace(/^www\./, '');
+    } catch {
+      return citation.title || citation.url;
+    }
+  }
+
+  if (citation.title && !isGuidLike(citation.title)) return citation.title;
+  if (citation.source && !isGuidLike(citation.source)) return citation.source;
+  return citation.kind === 'memory' ? 'Local memory' : 'Source';
+}
+
+function isGuidLike(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(value ?? ''));
 }
 
 async function loadModels() {
@@ -932,16 +969,23 @@ async function deleteSession(id) {
 
 async function sendMessage(event) {
   event.preventDefault();
+  if (state.isStreaming) {
+    setInlineProgress('Still finishing the previous response...');
+    return;
+  }
+
   const message = $('prompt').value.trim();
   if (!message) return;
 
+  state.isStreaming = true;
+  state.activeAssistantId = `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   await guarded(async () => {
     await ensurePersistedSession();
     $('prompt').value = '';
     $('sendButton').disabled = true;
+    $('prompt').disabled = true;
     const existingMessages = documentMessages();
-    clearResponseDetails();
-    renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
+    renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '', draftId: state.activeAssistantId }]);
     setInlineProgress('Routing request...');
 
     const result = await streamChat(`/sessions/${state.sessionId}/chat/stream`, {
@@ -956,7 +1000,7 @@ async function sendMessage(event) {
       })
     });
 
-    renderMessages(result.messages);
+    applyFinalResponse(result);
     renderMetrics(result.metrics);
     const assistantTrace = [...state.messageTraces.entries()].at(-1);
 
@@ -967,6 +1011,9 @@ async function sendMessage(event) {
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
     $('sendButton').disabled = false;
+    $('prompt').disabled = false;
+    state.isStreaming = false;
+    state.activeAssistantId = null;
   });
 }
 
@@ -981,84 +1028,157 @@ async function streamChat(path, options) {
   const reader = response.body.getReader();
   let buffer = '';
   let finalResult = null;
+  let progressHistory = [];
 
-  while (true) {
-    const { value, done } = await reader.read();
+  let streamError = null;
 
-    if (done) break;
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
 
-    buffer += decoder.decode(value, { stream: true });
-    const parts = buffer.split('\n\n');
-    buffer = parts.pop() ?? '';
+      if (done) break;
 
-    for (const part of parts) {
-      const event = parseServerEvent(part);
-      if (!event) continue;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() ?? '';
 
-      if (event.type === 'chunk' && event.content) {
-        clearInlineProgress();
-        appendAssistantChunk(event.content);
-      }
+      for (const part of parts) {
+        const event = parseServerEvent(part);
+        if (!event) continue;
 
-      if (event.type === 'progress' && event.content) {
-        setInlineProgress(event.content);
-        if (event.payload?.graph) {
-          state.taskGraph = event.payload.graph;
+        if (event.type === 'chunk' && event.content) {
+          clearInlineProgress();
+          appendAssistantChunk(event.content);
+        }
+
+        if (event.type === 'progress' && event.content) {
+          progressHistory = [...progressHistory, event.content].slice(-4);
+          setInlineProgress(progressHistory);
+          if (event.payload?.graph) {
+            state.taskGraph = event.payload.graph;
+          }
+        }
+
+        if (event.type === 'task_graph' && event.payload) {
+          state.taskGraph = event.payload;
+        }
+
+        if (event.type === 'final') {
+          clearInlineProgress();
+          finalResult = event.result;
+          if (finalResult) {
+            applyFinalResponse(finalResult);
+          }
+        }
+
+        if (event.type === 'error') {
+          throw new Error(event.content ?? 'Streaming chat failed.');
         }
       }
-
-    if (event.type === 'task_graph' && event.payload) {
-      state.taskGraph = event.payload;
     }
 
-      if (event.type === 'final') {
-        clearInlineProgress();
+    if (buffer.trim()) {
+      const event = parseServerEvent(buffer);
+      if (event?.type === 'final') {
         finalResult = event.result;
-      }
-
-      if (event.type === 'error') {
-        throw new Error(event.content ?? 'Streaming chat failed.');
+        if (finalResult) {
+          applyFinalResponse(finalResult);
+        }
       }
     }
+  } catch (error) {
+    streamError = error;
   }
 
   if (!finalResult) {
-    throw new Error('Streaming chat ended without a final response.');
+    try {
+      finalResult = await recoverFinalResponse();
+    } catch (recoveryError) {
+      throw streamError ?? recoveryError;
+    }
   }
 
   return finalResult;
 }
 
+async function recoverFinalResponse() {
+  if (!state.sessionId) {
+    throw new Error('Streaming chat ended without a final response.');
+  }
+
+  setInlineProgress('Recovering saved response...');
+  const session = await api(`/sessions/${encodeURIComponent(state.sessionId)}`);
+  const messages = session.messages ?? [];
+  const last = messages[messages.length - 1];
+
+  if (last?.role !== 'assistant' || !last.content) {
+    throw new Error('Streaming chat ended before a final response was saved.');
+  }
+
+  const routeStep = last.reasoningSteps?.find?.(step => step.kind === 'route');
+  return {
+    sessionId: state.sessionId,
+    response: last.content,
+    messages,
+    metrics: null,
+    reasoningSteps: last.reasoningSteps ?? [],
+    summarized: false,
+    route: routeStep ? { reason: routeStep.content } : null
+  };
+}
+
+function applyFinalResponse(result) {
+  if (!result?.messages) return;
+  state.activeAssistantId = null;
+  renderMessages(result.messages);
+}
+
 function parseServerEvent(raw) {
   const dataLine = raw.split('\n').find(line => line.startsWith('data: '));
-  return dataLine ? JSON.parse(dataLine.slice(6)) : null;
+  if (!dataLine) return null;
+
+  try {
+    return JSON.parse(dataLine.slice(6));
+  } catch {
+    return null;
+  }
 }
 
 function appendAssistantChunk(content) {
   const messages = $('messages');
-  const assistantMessages = messages.querySelectorAll('.message.assistant');
-  const target = assistantMessages[assistantMessages.length - 1];
+  const assistantMessages = [...messages.querySelectorAll('.message.assistant')];
+  const target = activeAssistantElement(assistantMessages) ?? assistantMessages[assistantMessages.length - 1];
 
   if (!target) return;
 
   target.dataset.raw = (target.dataset.raw ?? '') + content;
   target.querySelector('.markdown-body').innerHTML = renderMarkdown(target.dataset.raw);
+  const messageIndex = [...messages.querySelectorAll('.message')].indexOf(target);
+  if (messageIndex >= 0 && state.currentMessages[messageIndex]) {
+    state.currentMessages[messageIndex] = { ...state.currentMessages[messageIndex], content: target.dataset.raw };
+  }
   messages.scrollTop = messages.scrollHeight;
+}
+
+function activeAssistantElement(assistantMessages) {
+  return state.activeAssistantId
+    ? assistantMessages.find(element => element.dataset.draftId === state.activeAssistantId)
+    : null;
 }
 
 function setInlineProgress(content) {
   const messages = $('messages');
   let progress = $('inlineProgress');
+  const items = Array.isArray(content) ? content : [content || 'Thinking...'];
 
   if (!progress) {
     progress = document.createElement('div');
     progress.id = 'inlineProgress';
     progress.className = 'inline-progress';
-    progress.innerHTML = '<span class="inline-spinner"></span><span class="inline-progress-text"></span>';
     messages.appendChild(progress);
   }
 
-  progress.querySelector('.inline-progress-text').textContent = content || 'Thinking...';
+  progress.innerHTML = `<span class="inline-spinner"></span><div class="inline-progress-stack">${items.map((item, index) => `<span class="inline-progress-text ${index === items.length - 1 ? 'current' : ''}">${escapeHtml(item)}</span>`).join('')}</div>`;
   messages.scrollTop = messages.scrollHeight;
 }
 
@@ -1067,10 +1187,12 @@ function clearInlineProgress() {
 }
 
 function documentMessages() {
-  return [...document.querySelectorAll('.message')].map(element => ({
-    role: element.classList.contains('user') ? 'user' : 'assistant',
-    content: element.dataset.raw ?? element.textContent
-  }));
+  return state.currentMessages.length
+    ? state.currentMessages
+    : [...document.querySelectorAll('.message')].map(element => ({
+      role: element.classList.contains('user') ? 'user' : 'assistant',
+      content: element.dataset.raw ?? element.textContent
+    }));
 }
 
 function renderMarkdown(markdown) {

@@ -47,13 +47,16 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
     private static CitationSource ToCitation(MemorySearchResult result)
     {
-        var source = GetMetadata(result, "sourceFile") ?? GetMetadata(result, "source") ?? result.Id;
+        var source = GetMetadata(result, "sourceFile") ?? GetMetadata(result, "source");
         var chunk = GetMetadata(result, "chunkIndex");
         var kind = GetMetadata(result, "kind") ?? "memory";
+        var title = source is null
+            ? "Local memory"
+            : chunk is null ? source : $"{source} chunk {chunk}";
 
         return new CitationSource(
             Kind: kind.Equals("document_chunk", StringComparison.OrdinalIgnoreCase) ? "document" : "memory",
-            Title: chunk is null ? source : $"{source} chunk {chunk}",
+            Title: title,
             Source: source,
             Chunk: chunk,
             Score: result.Score);

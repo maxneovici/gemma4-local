@@ -62,12 +62,17 @@ public static class SessionEndpoints
         {
             context.Response.Headers.CacheControl = "no-cache";
             context.Response.Headers.Connection = "keep-alive";
+            context.Response.Headers["X-Accel-Buffering"] = "no";
             context.Response.ContentType = "text/event-stream";
+            await context.Response.WriteAsync("retry: 1000\n\n", cancellationToken);
+            await context.Response.Body.FlushAsync(cancellationToken);
+            var eventId = 0;
 
             try
             {
                 await foreach (var streamEvent in orchestrator.StreamChatAsync(id, request, cancellationToken))
                 {
+                    await context.Response.WriteAsync($"id: {++eventId}\n", cancellationToken);
                     await context.Response.WriteAsync($"event: {streamEvent.Type}\n", cancellationToken);
                     await context.Response.WriteAsync($"data: {JsonSerializer.Serialize(streamEvent, SseJsonOptions)}\n\n", cancellationToken);
                     await context.Response.Body.FlushAsync(cancellationToken);
