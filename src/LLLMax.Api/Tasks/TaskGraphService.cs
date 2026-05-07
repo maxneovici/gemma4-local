@@ -93,7 +93,7 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
     {
         var graph = await EnsureForSessionAsync(sessionId, progress.Tool, cancellationToken);
         var title = $"Tool {progress.Tool}";
-        var toolNode = graph.Nodes.LastOrDefault(node => node.Kind == "tool" && node.Title.Equals(title, StringComparison.OrdinalIgnoreCase) && node.Status != "complete");
+        var toolNode = graph.Nodes.LastOrDefault(node => node.Kind == "tool" && node.Title.Equals(title, StringComparison.OrdinalIgnoreCase) && node.Status.Equals("active", StringComparison.OrdinalIgnoreCase));
         var node = toolNode ?? new TaskGraphNode(NewId(), title, "tool", progress.Status, Confidence: 0.45, StartedAt: DateTimeOffset.UtcNow);
         var nodes = graph.Nodes.Where(existing => existing.Id != node.Id).ToList();
         var nextNode = node with
@@ -133,7 +133,10 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
     {
         var graph = await EnsureForSessionAsync(sessionId, "Session task", cancellationToken);
         var now = DateTimeOffset.UtcNow;
+        var isBlocked = reasoningSteps.Any(step => step.Kind is "tool_error" or "loop_guard");
         var nodes = graph.Nodes.Select(node => node.Id == graph.ActiveNodeId
+                && !isBlocked
+                && !node.Status.Equals("blocked", StringComparison.OrdinalIgnoreCase)
             ? node with { Status = "complete", Confidence = 0.85, CompletedAt = now, Blocker = null }
             : node).ToList();
         var artifacts = graph.Artifacts.ToList();
@@ -152,9 +155,9 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
 
         return await SaveAsync(graph with
         {
-            Status = "complete",
-            ActiveNodeId = null,
-            Confidence = Math.Max(graph.Confidence, 0.8),
+            Status = isBlocked ? "blocked" : "complete",
+            ActiveNodeId = isBlocked ? graph.ActiveNodeId : null,
+            Confidence = isBlocked ? Math.Min(graph.Confidence, 0.35) : Math.Max(graph.Confidence, 0.8),
             Nodes = nodes,
             Artifacts = artifacts,
             Events = [.. graph.Events, NewEvent("run_completed", "Assistant response completed.")],

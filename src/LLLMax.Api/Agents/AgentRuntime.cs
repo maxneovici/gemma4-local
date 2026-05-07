@@ -104,8 +104,27 @@ public sealed class AgentRuntime(
                 break;
             }
 
-            var tool = toolRegistry.GetRequiredTool(toolCall.Tool);
-            EnsureToolAllowed(agent, tool.Name);
+            ILocalTool tool;
+
+            try
+            {
+                tool = toolRegistry.GetRequiredTool(toolCall.Tool);
+                EnsureToolAllowed(agent, tool.Name);
+            }
+            catch (InvalidOperationException exception)
+            {
+                var failure = $"Tool {toolCall.Tool} could not be used: {exception.Message}";
+                toolResults.Add(new ToolExecutionResult(toolCall.Tool, failure));
+                reasoningSteps.Add(new ReasoningStep("tool_error", failure, DateTimeOffset.UtcNow));
+                await PublishAsync(request, new AgentRuntimeEvent(
+                    Kind: "tool_failed",
+                    Content: failure,
+                    Tool: toolCall.Tool,
+                    Result: failure), cancellationToken);
+                response = response with { Response = failure };
+                break;
+            }
+
             reasoningSteps.Add(new ReasoningStep("tool_call", $"{tool.Name}: {string.Join(", ", toolCall.Arguments.Keys)}", DateTimeOffset.UtcNow));
             await PublishAsync(request, new AgentRuntimeEvent(
                 Kind: "tool_started",
@@ -113,12 +132,31 @@ public sealed class AgentRuntime(
                 Tool: tool.Name,
                 Arguments: toolCall.Arguments.ToDictionary(pair => pair.Key, pair => pair.Value.ToString())), cancellationToken);
 
-            var result = await tool.InvokeAsync(new LocalToolInvocation(
-                ToolName: tool.Name,
-                Arguments: toolCall.Arguments,
-                Agent: agent,
-                ConversationId: request.ConversationId,
-                DelegationDepth: delegationDepth), cancellationToken);
+            LocalToolResult result;
+
+            try
+            {
+                result = await tool.InvokeAsync(new LocalToolInvocation(
+                    ToolName: tool.Name,
+                    Arguments: toolCall.Arguments,
+                    Agent: agent,
+                    ConversationId: request.ConversationId,
+                    DelegationDepth: delegationDepth,
+                    OnEvent: request.OnEvent), cancellationToken);
+            }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                var failure = $"Tool {tool.Name} failed: {exception.Message}";
+                toolResults.Add(new ToolExecutionResult(tool.Name, failure));
+                reasoningSteps.Add(new ReasoningStep("tool_error", failure, DateTimeOffset.UtcNow));
+                await PublishAsync(request, new AgentRuntimeEvent(
+                    Kind: "tool_failed",
+                    Content: failure,
+                    Tool: tool.Name,
+                    Result: failure), cancellationToken);
+                response = response with { Response = failure };
+                break;
+            }
 
             toolResults.Add(new ToolExecutionResult(tool.Name, result.Content));
             reasoningSteps.Add(new ReasoningStep("tool_result", result.Content, DateTimeOffset.UtcNow));

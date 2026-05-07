@@ -220,6 +220,8 @@ function renderTaskGraph(graph) {
   }
 
   const active = graph.nodes?.find(node => node.id === graph.activeNodeId);
+  const artifacts = graph.artifacts ?? [];
+  const events = graph.events ?? [];
   $('taskGraph').innerHTML = `
     <div class="graph-head"><strong>${escapeHtml(graph.status)}</strong><span>${escapeHtml(Math.round((graph.confidence ?? 0) * 100))}% confidence</span></div>
     <p>${escapeHtml(graph.goal)}</p>
@@ -234,7 +236,20 @@ function renderTaskGraph(graph) {
       `).join('')}
     </div>
     <div class="artifact-list">
-      ${(graph.artifacts ?? []).slice(-4).map(artifact => `<span>${escapeHtml(artifact.kind)}: ${escapeHtml(artifact.title)}</span>`).join('')}
+      ${artifacts.slice(-4).map(artifact => `
+        <details class="graph-detail">
+          <summary>${escapeHtml(artifact.kind)}: ${escapeHtml(artifact.title)}</summary>
+          <pre>${escapeHtml(artifact.content)}</pre>
+        </details>
+      `).join('')}
+    </div>
+    <div class="event-list">
+      ${events.slice(-6).map(item => `
+        <details class="graph-detail" ${item.kind.startsWith('tool_') ? 'open' : ''}>
+          <summary>${escapeHtml(item.kind)}</summary>
+          <pre>${escapeHtml(item.content)}</pre>
+        </details>
+      `).join('')}
     </div>
   `;
 }
@@ -338,6 +353,10 @@ async function streamChat(path, options) {
 
       if (event.type === 'progress' && event.content) {
         setInlineProgress(event.content);
+        if (event.payload?.graph) {
+          state.taskGraph = event.payload.graph;
+          renderTaskGraph(state.taskGraph);
+        }
       }
 
       if (event.type === 'task_graph' && event.payload) {

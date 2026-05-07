@@ -77,6 +77,13 @@ public static class SessionEndpoints
                 await context.Response.WriteAsync($"data: {error}\n\n", cancellationToken);
                 await context.Response.Body.FlushAsync(cancellationToken);
             }
+            catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                var error = JsonSerializer.Serialize(new SessionChatStreamEvent("error", exception.Message), SseJsonOptions);
+                await context.Response.WriteAsync("event: error\n", cancellationToken);
+                await context.Response.WriteAsync($"data: {error}\n\n", cancellationToken);
+                await context.Response.Body.FlushAsync(cancellationToken);
+            }
         });
 
         return app;

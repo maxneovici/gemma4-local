@@ -26,15 +26,36 @@ public sealed class AgentDelegationTool(IServiceProvider serviceProvider, IOptio
         }
 
         var agentRuntime = serviceProvider.GetRequiredService<IAgentRuntime>();
+        await PublishAsync(invocation, new AgentRuntimeEvent(
+            Kind: "tool_started",
+            Content: $"Delegating to {arguments.Agent}: {arguments.Message}",
+            Tool: $"delegate_to_agent/{arguments.Agent}"), cancellationToken);
+
         var response = await agentRuntime.RunAsync(new AgentRunRequest(
             Agent: arguments.Agent,
             Message: arguments.Message,
-            AllowTools: false,
+            AllowTools: true,
             ConversationId: invocation.ConversationId,
-            DelegationDepth: invocation.DelegationDepth + 1), cancellationToken);
+            DelegationDepth: invocation.DelegationDepth + 1,
+            OnEvent: invocation.OnEvent is null
+                ? null
+                : async (runtimeEvent, token) => await invocation.OnEvent(runtimeEvent with
+                {
+                    Tool = runtimeEvent.Tool is null ? null : $"{arguments.Agent}/{runtimeEvent.Tool}",
+                    Content = $"[{arguments.Agent}] {runtimeEvent.Content}"
+                }, token)), cancellationToken);
+
+        await PublishAsync(invocation, new AgentRuntimeEvent(
+            Kind: "tool_completed",
+            Content: $"{arguments.Agent} completed delegated work.",
+            Tool: $"delegate_to_agent/{arguments.Agent}",
+            Result: response.Response), cancellationToken);
 
         return new LocalToolResult(response.Response);
     }
+
+    private static Task PublishAsync(LocalToolInvocation invocation, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
+        invocation.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
 }
 
 public sealed record AgentDelegationArguments([property: Required] string Agent, [property: Required] string Message);

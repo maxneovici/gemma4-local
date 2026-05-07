@@ -8,6 +8,7 @@ public sealed record LocalToolInvocation(
     IReadOnlyDictionary<string, JsonElement> Arguments,
     AgentDefinition Agent,
     string? ConversationId,
-    int DelegationDepth);
+    int DelegationDepth,
+    Func<AgentRuntimeEvent, CancellationToken, Task>? OnEvent = null);
 
 public sealed record LocalToolResult(string Content);

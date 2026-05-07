@@ -58,7 +58,7 @@ public sealed class AssistantOrchestrator(
                 {
                     await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
                         Tool: runtimeEvent.Tool,
-                        Status: runtimeEvent.Kind == "tool_completed" ? "complete" : "active",
+                        Status: RuntimeEventStatus(runtimeEvent),
                         Content: runtimeEvent.Content,
                         Arguments: runtimeEvent.Arguments,
                         Result: runtimeEvent.Result), token);
@@ -155,7 +155,7 @@ public sealed class AssistantOrchestrator(
 
                         var graph = await taskGraphs.RecordToolProgressAsync(session.Id, new TaskGraphToolProgress(
                             Tool: runtimeEvent.Tool,
-                            Status: runtimeEvent.Kind == "tool_completed" ? "complete" : "active",
+                            Status: RuntimeEventStatus(runtimeEvent),
                             Content: runtimeEvent.Content,
                             Arguments: runtimeEvent.Arguments,
                             Result: runtimeEvent.Result), token);
@@ -344,6 +344,14 @@ public sealed class AssistantOrchestrator(
 
     private static IReadOnlyList<ReasoningStep> WithToolDecision(ToolUseDecision decision, IReadOnlyList<ReasoningStep> steps) =>
         [new ReasoningStep("route", $"intent={decision.Intent}; mode={decision.ResponseMode}; policy={decision.Policy}; model={decision.Model}; reasoning={decision.ReasoningEffort}; temperature={decision.Temperature:0.00}; confidence={decision.Confidence:0.00}; tools={string.Join(", ", decision.SuggestedTools)}; reason={decision.Reason}", DateTimeOffset.UtcNow), .. steps];
+
+    private static string RuntimeEventStatus(AgentRuntimeEvent runtimeEvent) =>
+        runtimeEvent.Kind switch
+        {
+            "tool_completed" => "complete",
+            "tool_failed" => "blocked",
+            _ => "active"
+        };
 
     private async Task<string> SummarizeAsync(AssistantSession session, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken)
     {
