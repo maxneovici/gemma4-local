@@ -208,9 +208,14 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
                 : new LocalToolResult($"Samsung TV {commandDescription}, but PowerState was not verified as on. Observed PowerState: {observedState ?? "unreachable"}.");
         }
 
-        return observedState?.Equals("on", StringComparison.OrdinalIgnoreCase) == false
+        if (observedState is null)
+        {
+            return new LocalToolResult($"Samsung TV {commandDescription}; TV became unreachable afterward, which may mean it powered off, but off state was not explicitly verified.");
+        }
+
+        return observedState.Equals("on", StringComparison.OrdinalIgnoreCase) == false
             ? new LocalToolResult($"Samsung TV {commandDescription} and PowerState is {observedState}.")
-            : new LocalToolResult($"Samsung TV {commandDescription}, but PowerState was not verified as off. Observed PowerState: {observedState ?? "unreachable"}.");
+            : new LocalToolResult($"Samsung TV {commandDescription}, but PowerState was not verified as off. Observed PowerState: {observedState}.");
     }
 
     private async Task<string?> WaitForSamsungTvPowerStateAsync(LocalSamsungTvOptions tv, string requestedState, CancellationToken cancellationToken)

@@ -279,6 +279,12 @@ public sealed class AssistantOrchestrator(
         SessionChatResponse toolResponse,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
+        if (toolResponse.Messages.LastOrDefault()?.ToolTraces?.Any(trace => trace.Tool.Equals("smart_home", StringComparison.OrdinalIgnoreCase)) == true)
+        {
+            yield return new SessionChatStreamEvent("final", Result: toolResponse);
+            yield break;
+        }
+
         if (string.IsNullOrWhiteSpace(toolResponse.Response))
         {
             yield return new SessionChatStreamEvent("final", Result: toolResponse);
