@@ -82,9 +82,7 @@ function renderMessages(messages) {
   if (previousTraceId && state.messageTraces.has(previousTraceId)) {
     selectMessageTrace(previousTraceId);
   } else {
-    state.selectedTraceId = null;
-    renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
-    renderSteps([]);
+    clearResponseDetails();
   }
 
   $('messages').scrollTop = $('messages').scrollHeight;
@@ -113,29 +111,25 @@ function renderMessage(message, index) {
     citations: message.citations ?? []
   });
 
-  return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"><div class="markdown-body">${renderMarkdown(raw)}</div>${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
+  return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"><div class="markdown-body">${renderMarkdown(raw)}</div>${renderMessageCitations(message.citations ?? [])}${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
+}
+
+function renderMessageCitations(citations) {
+  return citations?.length
+    ? `<div class="message-citations"><span>Sources</span>${citations.map(citation => citation.url
+      ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>`
+      : `<code>${escapeHtml(citation.title)}</code>`).join('')}</div>`
+    : '';
 }
 
 function renderRuntime(health) {
   const highModel = state.models.find(model => model.name === 'gemma4:31b');
   $('runtime').innerHTML = `
     <div class="runtime-pill ${health?.isHealthy ? 'healthy' : 'unknown'}"><span>ollama</span><strong>${health?.isHealthy ? 'healthy' : 'unknown'}</strong></div>
-    <button id="runtimeModels" class="runtime-pill runtime-models" type="button"><span>models</span><strong>${escapeHtml(String(state.models.length))}</strong></button>
+    <div class="runtime-pill"><span>models</span><strong>${escapeHtml(String(state.models.length))}</strong></div>
     <div class="runtime-pill"><span>31b</span><strong>${escapeHtml(highModel ? `${highModel.sizeGb} GB` : 'missing')}</strong></div>
     <div class="runtime-pill ${state.sessionId ? 'healthy' : ''}"><span>session</span><strong>${state.sessionId ? 'active' : 'none'}</strong></div>
-    <div id="modelDropdown" class="model-dropdown" hidden>
-      ${state.models.map(model => `<button type="button" data-select-model="${escapeHtml(model.name)}"><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.sizeGb)} GB</span></button>`).join('') || '<p class="muted">No local models found.</p>'}
-    </div>
   `;
-  $('runtimeModels').addEventListener('click', () => {
-    $('modelDropdown').hidden = !$('modelDropdown').hidden;
-  });
-  document.querySelectorAll('[data-select-model]').forEach(button => {
-    button.addEventListener('click', () => {
-      $('modelSelect').value = button.dataset.selectModel;
-      $('modelDropdown').hidden = true;
-    });
-  });
 }
 
 function renderMetrics(metrics) {
@@ -179,6 +173,17 @@ function selectMessageTrace(traceId) {
   renderToolTraces(trace?.toolTraces ?? []);
   renderCitations(trace?.citations ?? []);
   renderSteps(trace?.reasoningSteps ?? []);
+}
+
+function clearResponseDetails() {
+  state.selectedTraceId = null;
+  document.querySelectorAll('[data-trace-id]').forEach(element => element.classList.remove('selected'));
+  renderMetrics(null);
+  renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
+  renderToolTraces([]);
+  renderCitations([]);
+  renderSteps([]);
+  document.querySelector('.response-details')?.removeAttribute('open');
 }
 
 function renderToolTraces(toolTraces) {
@@ -331,18 +336,22 @@ function formatSessionDate(value) {
 async function loadMemoryStats() {
   const stats = await api('/memory/stats');
   $('memoryStats').innerHTML = `
-    <div class="runtime-pill"><span>provider</span><strong>${escapeHtml(stats.provider)}</strong></div>
+    <button id="openQdrantBrowser" class="runtime-pill qdrant-button" type="button"><span>browse vector memory</span><strong>${escapeHtml(stats.provider)}</strong></button>
     <div class="runtime-pill"><span>collections</span><strong>${stats.collectionCount}</strong></div>
     <div class="runtime-pill"><span>records</span><strong>${stats.recordCount}</strong></div>
   `;
+  $('openQdrantBrowser').addEventListener('click', openQdrantBrowser);
   await loadMemoryCollections();
 }
 
 async function loadMemoryCollections() {
   state.memoryCollections = await api('/memory/collections');
-  const selected = state.selectedCollection ?? state.memoryCollections[0]?.name ?? 'coordinator';
+  const selectedExists = state.memoryCollections.some(collection => collection.name === state.selectedCollection);
+  const coordinator = state.memoryCollections.find(collection => collection.name === 'coordinator');
+  const selected = selectedExists ? state.selectedCollection : coordinator?.name ?? state.memoryCollections[0]?.name ?? 'coordinator';
+  state.selectedCollection = selected;
   $('memoryCollectionSelect').innerHTML = state.memoryCollections.map(collection => `
-    <option value="${escapeHtml(collection.name)}" ${collection.name === selected ? 'selected' : ''}>${escapeHtml(collection.name)}</option>
+    <option value="${escapeHtml(collection.name)}" ${collection.name === selected ? 'selected' : ''}>${escapeHtml(humanizeCollectionName(collection.name))} (${escapeHtml(collection.recordCount)} memories)</option>
   `).join('') || '<option value="coordinator">coordinator</option>';
   renderQdrantCollectionTable();
 }
@@ -528,6 +537,9 @@ async function openQdrantBrowser() {
   $('qdrantModal').hidden = false;
   await guarded(async () => {
     await loadMemoryCollections();
+    if (state.memoryCollections.some(collection => collection.name === state.selectedCollection)) {
+      await browseCollection(state.selectedCollection);
+    }
   }, 'Opening Qdrant browser...', { overlay: false });
 }
 
@@ -684,9 +696,9 @@ async function newSession() {
   knownJobStates = new Map();
   $('sessionTitle').textContent = state.draftSession.title;
   renderMessages([]);
-  state.selectedTraceId = null;
-  renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
-  renderSteps([]);
+  clearResponseDetails();
+  $('memoryResults').innerHTML = '';
+  $('artifactViewer').hidden = true;
   await Promise.all([loadSessions(), loadMemoryStats()]);
   await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
@@ -698,8 +710,7 @@ async function deleteAllSessions() {
     state.sessionId = null;
     $('sessionTitle').textContent = 'Ready';
     renderMessages([]);
-    renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
-    renderSteps([]);
+    clearResponseDetails();
     await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs()]);
     await newSession();
   }, 'Deleting sessions...');
@@ -756,6 +767,7 @@ async function sendMessage(event) {
     $('prompt').value = '';
     $('sendButton').disabled = true;
     const existingMessages = documentMessages();
+    clearResponseDetails();
     renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '' }]);
     setInlineProgress('Routing request...');
 
@@ -1140,7 +1152,6 @@ $('extractInvoice').addEventListener('click', () => runDocumentAction('/document
 $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
-$('openQdrantBrowser').addEventListener('click', openQdrantBrowser);
 $('closeQdrantBrowser').addEventListener('click', closeQdrantBrowser);
 $('qdrantModal').addEventListener('click', event => {
   if (event.target.id === 'qdrantModal') closeQdrantBrowser();
@@ -1151,10 +1162,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
 }
 
-renderMetrics(null);
-renderToolTraces([]);
-renderCitations([]);
-renderSteps([]);
+clearResponseDetails();
 
 await guarded(async () => {
   await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);

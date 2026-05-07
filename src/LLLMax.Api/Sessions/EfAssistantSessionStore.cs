@@ -76,9 +76,7 @@ public sealed class EfAssistantSessionStore(
         try
         {
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
-            var persisted = await TryGetAsync(db, session.Id, cancellationToken);
-            var merged = persisted is null ? session : MergeMessages(session, persisted);
-            await SaveUnsafeAsync(db, merged, cancellationToken);
+            await SaveUnsafeAsync(db, session, cancellationToken);
         }
         finally
         {
@@ -175,8 +173,8 @@ public sealed class EfAssistantSessionStore(
 
     private static async Task SaveUnsafeAsync(LocalDbContext db, AssistantSession session, CancellationToken cancellationToken)
     {
+        await using var transaction = await db.Database.BeginTransactionAsync(cancellationToken);
         var existing = await db.Sessions
-            .Include(entity => entity.Messages)
             .SingleOrDefaultAsync(entity => entity.Id == session.Id, cancellationToken);
 
         if (existing is null)
@@ -191,11 +189,12 @@ public sealed class EfAssistantSessionStore(
             existing.Summary = session.Summary;
             existing.CreatedAt = session.CreatedAt;
             existing.UpdatedAt = session.UpdatedAt;
-            existing.Messages.Clear();
-            existing.Messages.AddRange(session.Messages.Select((message, index) => ToEntity(session.Id, index, message)));
+            await db.SessionMessages.Where(message => message.SessionId == session.Id).ExecuteDeleteAsync(cancellationToken);
+            db.SessionMessages.AddRange(session.Messages.Select((message, index) => ToEntity(session.Id, index, message)));
         }
 
         await db.SaveChangesAsync(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
     }
 
     private static void AddSession(LocalDbContext db, AssistantSession session) =>
@@ -246,38 +245,4 @@ public sealed class EfAssistantSessionStore(
                     Citations: message.CitationsJson is null ? null : JsonSerializer.Deserialize<IReadOnlyList<CitationSource>>(message.CitationsJson, JsonOptions)))
                 .ToList());
 
-    private static AssistantSession MergeMessages(AssistantSession incoming, AssistantSession persisted)
-    {
-        if (persisted.Messages.Count == 0)
-        {
-            return incoming;
-        }
-
-        if (incoming.Messages.SequenceEqual(persisted.Messages.Take(incoming.Messages.Count)))
-        {
-            return incoming with
-            {
-                Messages = [.. incoming.Messages, .. persisted.Messages.Skip(incoming.Messages.Count)],
-                UpdatedAt = Max(incoming.UpdatedAt, persisted.UpdatedAt)
-            };
-        }
-
-        var incomingKeys = incoming.Messages.Select(MessageKey).ToHashSet(StringComparer.Ordinal);
-        var outOfBandMessages = persisted.Messages
-            .Where(message => !incomingKeys.Contains(MessageKey(message)))
-            .ToList();
-
-        return outOfBandMessages.Count > 0
-            ? incoming with
-            {
-                Messages = [.. incoming.Messages, .. outOfBandMessages],
-                UpdatedAt = Max(incoming.UpdatedAt, persisted.UpdatedAt)
-            }
-            : incoming;
-    }
-
-    private static DateTimeOffset Max(DateTimeOffset left, DateTimeOffset right) =>
-        left >= right ? left : right;
-
-    private static string MessageKey(LocalChatMessage message) => $"{message.Role}\u001f{message.Content}";
 }

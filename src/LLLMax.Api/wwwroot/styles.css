@@ -126,6 +126,9 @@ select, input { padding: 0.65rem 0.7rem; }
 .message.assistant.selected { border-color: rgba(56, 189, 248, 0.52); box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.08); }
 .trace-hint { display: inline-flex; margin-top: 0.45rem; color: var(--accent); font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.08em; }
 .message.user { white-space: pre-wrap; }
+.message-citations { display: flex; align-items: center; gap: 0.35rem; flex-wrap: wrap; margin-top: 0.65rem; padding-top: 0.55rem; border-top: 1px solid var(--line); }
+.message-citations span { color: var(--muted); font-size: 0.66rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.message-citations a, .message-citations code { padding: 0.15rem 0.38rem; border: 1px solid rgba(56, 189, 248, 0.18); border-radius: 999px; color: var(--accent); background: rgba(56, 189, 248, 0.06); font-size: 0.68rem; text-decoration: none; }
 .markdown-body > :first-child { margin-top: 0; }
 .markdown-body > :last-child { margin-bottom: 0; }
 .markdown-body p { margin: 0.45rem 0; }
@@ -156,12 +159,10 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .runtime-pill { text-align: left; }
 .runtime-pill.healthy { border-color: rgba(34, 197, 94, 0.34); box-shadow: inset 0 0 0 1px rgba(34, 197, 94, 0.06); }
 .runtime-pill.healthy strong { color: var(--success); }
-.runtime-models { cursor: pointer; }
+.qdrant-button { grid-column: 1 / -1; cursor: pointer; }
 .runtime-pill span, .metric span { display: block; color: var(--muted); font-size: 0.7rem; }
 .runtime-pill strong, .metric strong { display: block; margin-top: 0.2rem; font-size: 0.98rem; }
-.model-dropdown { grid-column: 1 / -1; display: grid; gap: 0.35rem; padding: 0.45rem; border: 1px solid rgba(56, 189, 248, 0.18); border-radius: 13px; background: rgba(7, 7, 8, 0.72); }
-.model-dropdown button { display: flex; align-items: center; justify-content: space-between; gap: 0.65rem; padding: 0.52rem 0.62rem; color: var(--text); }
-.model-dropdown button span { color: var(--muted); font-size: 0.68rem; }
+.panel-help { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
 .memory-search { display: grid; grid-template-columns: 0.9fr 1.1fr auto; gap: 0.5rem; margin-top: 0.65rem; }
 
 #consolidateSession { width: 100%; margin-top: 0.65rem; }
