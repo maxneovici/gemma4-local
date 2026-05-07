@@ -50,6 +50,12 @@ public sealed class MemoryReportJobHandler(
 
         await context.ReportAsync(new BackgroundJobProgress(1, 3, $"Retrieved {results.Count} chunks. Generating report..."), cancellationToken);
         var report = await GenerateReportAsync(request, filter, results, cancellationToken);
+        await context.AddArtifactAsync(new BackgroundJobArtifactCreateRequest(
+            Kind: "report",
+            Title: request.Title ?? "Memory report",
+            Content: report,
+            ContentType: "text/markdown",
+            FileName: $"{job.Id}-report.md"), cancellationToken);
         await context.ReportAsync(new BackgroundJobProgress(3, 3, "Report generated.", Result: report), cancellationToken);
 
         return report;

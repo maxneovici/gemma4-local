@@ -10,4 +10,6 @@ public interface IBackgroundJobHandler
 public interface IBackgroundJobContext
 {
     Task ReportAsync(BackgroundJobProgress progress, CancellationToken cancellationToken);
+
+    Task<BackgroundJobArtifact> AddArtifactAsync(BackgroundJobArtifactCreateRequest request, CancellationToken cancellationToken);
 }

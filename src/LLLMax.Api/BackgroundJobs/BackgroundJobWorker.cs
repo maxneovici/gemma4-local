@@ -11,6 +11,7 @@ public sealed class BackgroundJobWorker(
     BackgroundJobService jobs,
     IEnumerable<IBackgroundJobHandler> handlers,
     IAssistantSessionStore sessions,
+    IBackgroundJobArtifactStore artifacts,
     IOptions<LocalAiOptions> options,
     ILogger<BackgroundJobWorker> logger) : BackgroundService
 {
@@ -84,7 +85,7 @@ public sealed class BackgroundJobWorker(
                 UpdatedAt = now
             }, stoppingToken);
 
-            var context = new BackgroundJobContext(store, job);
+            var context = new BackgroundJobContext(store, artifacts, job);
             var result = await handler.RunAsync(job, context, cts.Token);
             job = await store.GetAsync(job.Id, stoppingToken) ?? job;
 
@@ -161,7 +162,7 @@ public sealed class BackgroundJobWorker(
             _ => $"Background job updated: {job.Title ?? job.Kind} is {job.Status}."
         };
 
-    private sealed class BackgroundJobContext(IBackgroundJobStore store, BackgroundJob initialJob) : IBackgroundJobContext
+    private sealed class BackgroundJobContext(IBackgroundJobStore store, IBackgroundJobArtifactStore artifacts, BackgroundJob initialJob) : IBackgroundJobContext
     {
         private BackgroundJob _job = initialJob;
 
@@ -179,5 +180,8 @@ public sealed class BackgroundJobWorker(
                 UpdatedAt = DateTimeOffset.UtcNow
             }, cancellationToken);
         }
+
+        public Task<BackgroundJobArtifact> AddArtifactAsync(BackgroundJobArtifactCreateRequest request, CancellationToken cancellationToken) =>
+            artifacts.CreateAsync(_job.Id, request, cancellationToken);
     }
 }

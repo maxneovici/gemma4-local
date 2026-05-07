@@ -158,6 +158,8 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .background-job p { margin: 0; color: #cfcfcf; font-size: 0.72rem; line-height: 1.35; }
 .background-job em { color: var(--danger); font-style: normal; font-size: 0.72rem; }
 .background-job button { padding: 0.45rem 0.55rem; color: var(--danger); }
+.job-artifacts { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.job-artifacts a { color: var(--accent); font-size: 0.72rem; text-decoration: none; border-bottom: 1px solid rgba(56, 189, 248, 0.32); }
 .job-title { display: flex; align-items: center; justify-content: space-between; gap: 0.55rem; }
 .job-title span, .background-job span { color: var(--muted); font-size: 0.72rem; }
 .approval p { margin: 0.35rem 0; color: #cfcfcf; font-size: 0.72rem; line-height: 1.35; }

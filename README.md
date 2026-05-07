@@ -371,10 +371,14 @@ Every document chunk stores `kind=document_chunk`, `source`, `sourceFile`, `sour
 
 Long-running work should be scheduled as background jobs so the main chat loop remains available. The built-in worker runs up to `LocalAi:Orchestration:MaxConcurrentBackgroundJobs` jobs at a time; the default is `3`.
 
+Completed jobs can attach durable artifacts, such as generated markdown reports, under `data/background-job-artifacts`. The UI links completed job artifacts from the Background Jobs panel.
+
 Current background-capable task:
 
 - `document_vectorize_folder`: vectorize large local document folders into Qdrant with progress, cancellation, and session completion notifications.
 - `memory_report`: retrieve scoped Qdrant/local memory chunks and generate a markdown report with the local model.
+
+Document vectorization computes SHA-256 content hashes and skips files already present in the target collection. Chunks are upserted in batches to reduce Qdrant write overhead.
 
 Good future background job candidates:
 

@@ -10,9 +10,9 @@ public sealed record DocumentVectorizeRequest(
     string? Category = null,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
-public sealed record DocumentVectorizeResponse(string Collection, int FileCount, int ChunkCount);
+public sealed record DocumentVectorizeResponse(string Collection, int FileCount, int ChunkCount, int SkippedFileCount = 0);
 
-public sealed record DocumentVectorizeProgress(int FilesProcessed, int FileCount, int ChunksWritten, string CurrentFile);
+public sealed record DocumentVectorizeProgress(int FilesProcessed, int FileCount, int ChunksWritten, string CurrentFile, int SkippedFileCount = 0);
 
 public sealed record OcrRequest(string DocumentId, string? Prompt = null, string? Model = null);
 

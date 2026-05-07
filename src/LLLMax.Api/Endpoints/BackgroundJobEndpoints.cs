@@ -30,6 +30,17 @@ public static class BackgroundJobEndpoints
             return job is null ? Results.NotFound() : Results.Ok(job);
         });
 
+        group.MapGet("/{id}/artifacts", async (string id, IBackgroundJobArtifactStore artifacts, CancellationToken cancellationToken) =>
+            Results.Ok(await artifacts.ListAsync(id, cancellationToken)));
+
+        group.MapGet("/{id}/artifacts/{artifactId}", async (string id, string artifactId, IBackgroundJobArtifactStore artifacts, CancellationToken cancellationToken) =>
+        {
+            var result = await artifacts.GetAsync(id, artifactId, cancellationToken);
+            return result is null
+                ? Results.NotFound()
+                : Results.Text(result.Value.Content, result.Value.Artifact.ContentType);
+        });
+
         group.MapPost("/", async (BackgroundJobCreateRequest request, IBackgroundJobService jobs, CancellationToken cancellationToken) =>
             Results.Ok(await jobs.EnqueueAsync(request, cancellationToken)));
 

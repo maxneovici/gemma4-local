@@ -21,10 +21,10 @@ public sealed class DocumentVectorizationJobHandler(IDocumentService documents) 
             await context.ReportAsync(new BackgroundJobProgress(
                 Current: progress.FilesProcessed,
                 Total: progress.FileCount,
-                Message: $"Vectorized {progress.FilesProcessed}/{progress.FileCount} files; {progress.ChunksWritten} chunks. Current: {progress.CurrentFile}"), token);
+                Message: $"Vectorized {progress.FilesProcessed}/{progress.FileCount} files; {progress.ChunksWritten} chunks; {progress.SkippedFileCount} skipped. Current: {progress.CurrentFile}"), token);
         });
 
-        var result = $"Vectorized {response.FileCount} files into collection `{response.Collection}` with {response.ChunkCount} chunks.";
+        var result = $"Vectorized {response.FileCount} files into collection `{response.Collection}` with {response.ChunkCount} chunks. Skipped {response.SkippedFileCount} already-indexed files.";
         await context.ReportAsync(new BackgroundJobProgress(response.FileCount, response.FileCount, result, Result: result), cancellationToken);
         return result;
     }

@@ -5,10 +5,22 @@ public sealed record MemoryUpsertRequest(
     string Text,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
+public sealed record MemoryBatchUpsertRequest(
+    string Collection,
+    IReadOnlyList<MemoryUpsertItem> Items);
+
+public sealed record MemoryUpsertItem(
+    string Text,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
 public sealed record MemorySearchRequest(
     string Collection,
     string Query,
     int Limit = 5,
+    IReadOnlyDictionary<string, string>? Filter = null);
+
+public sealed record MemoryCountRequest(
+    string Collection,
     IReadOnlyDictionary<string, string>? Filter = null);
 
 public sealed record MemoryRecord(
@@ -21,6 +33,10 @@ public sealed record MemoryRecord(
 public sealed record MemorySearchResult(string Id, string Text, double Score, IReadOnlyDictionary<string, string> Metadata);
 
 public sealed record MemoryUpsertResponse(string Id, string Collection);
+
+public sealed record MemoryBatchUpsertResponse(IReadOnlyList<string> Ids, string Collection);
+
+public sealed record MemoryCountResponse(string Collection, int Count);
 
 public sealed record MemoryStatsResponse(
     string Provider,

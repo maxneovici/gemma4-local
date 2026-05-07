@@ -62,3 +62,20 @@ public sealed record BackgroundJobListResponse(
     string? StatusMessage,
     string? Error,
     DateTimeOffset UpdatedAt);
+
+public sealed record BackgroundJobArtifact(
+    string Id,
+    string JobId,
+    string Kind,
+    string Title,
+    string ContentType,
+    string FileName,
+    long Bytes,
+    DateTimeOffset CreatedAt);
+
+public sealed record BackgroundJobArtifactCreateRequest(
+    string Kind,
+    string Title,
+    string Content,
+    string ContentType = "text/plain",
+    string? FileName = null);

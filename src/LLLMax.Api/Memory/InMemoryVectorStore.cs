@@ -37,6 +37,19 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
         return new MemoryUpsertResponse(id, request.Collection);
     }
 
+    public async Task<MemoryBatchUpsertResponse> UpsertBatchAsync(MemoryBatchUpsertRequest request, CancellationToken cancellationToken)
+    {
+        var ids = new List<string>();
+
+        foreach (var item in request.Items)
+        {
+            var response = await UpsertAsync(new MemoryUpsertRequest(request.Collection, item.Text, item.Metadata), cancellationToken);
+            ids.Add(response.Id);
+        }
+
+        return new MemoryBatchUpsertResponse(ids, request.Collection);
+    }
+
     public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(MemorySearchRequest request, CancellationToken cancellationToken)
     {
         if (!_collections.TryGetValue(request.Collection, out var collection))
@@ -62,6 +75,23 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
             .OrderByDescending(result => result.Score)
             .Take(request.Limit)
             .ToList();
+    }
+
+    public Task<MemoryCountResponse> CountAsync(MemoryCountRequest request, CancellationToken cancellationToken)
+    {
+        if (!_collections.TryGetValue(request.Collection, out var collection))
+        {
+            return Task.FromResult(new MemoryCountResponse(request.Collection, 0));
+        }
+
+        MemoryRecord[] snapshot;
+
+        lock (collection)
+        {
+            snapshot = collection.ToArray();
+        }
+
+        return Task.FromResult(new MemoryCountResponse(request.Collection, snapshot.Count(record => MatchesFilter(record.Metadata, request.Filter))));
     }
 
     public Task<MemoryStatsResponse> GetStatsAsync(CancellationToken cancellationToken)

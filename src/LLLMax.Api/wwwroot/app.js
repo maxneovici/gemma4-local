@@ -12,6 +12,8 @@ const state = {
   mcpServers: []
 };
 
+let knownJobStates = new Map();
+
 const $ = id => document.getElementById(id);
 const effortMap = ['low', 'auto', 'high'];
 
@@ -205,6 +207,7 @@ async function loadConsolidationJobs() {
 
 async function loadBackgroundJobs() {
   state.backgroundJobs = await api('/background-jobs');
+  await refreshCurrentSessionIfJobsCompleted(state.backgroundJobs);
   const recent = state.backgroundJobs.slice(0, 8);
   $('backgroundJobs').innerHTML = recent.map(job => {
     const total = job.progressTotal || 0;
@@ -218,6 +221,7 @@ async function loadBackgroundJobs() {
         <span>${escapeHtml(total > 0 ? `${current}/${total} · ${percent}%` : 'waiting')}</span>
         <p>${escapeHtml(job.statusMessage ?? '')}</p>
         ${job.error ? `<em>${escapeHtml(job.error)}</em>` : ''}
+        <div class="job-artifacts" data-job-artifacts="${escapeHtml(job.id)}"></div>
         ${canCancel ? `<button data-cancel-job="${escapeHtml(job.id)}" type="button">Cancel</button>` : ''}
       </div>
     `;
@@ -226,6 +230,33 @@ async function loadBackgroundJobs() {
   document.querySelectorAll('[data-cancel-job]').forEach(button => {
     button.addEventListener('click', () => cancelBackgroundJob(button.dataset.cancelJob));
   });
+
+  recent.filter(job => job.status === 'completed').forEach(job => loadJobArtifacts(job.id).catch(() => {}));
+}
+
+async function refreshCurrentSessionIfJobsCompleted(jobs) {
+  const completed = jobs.some(job => {
+    const previous = knownJobStates.get(job.id);
+    knownJobStates.set(job.id, job.status);
+    return previous && previous !== job.status && job.status === 'completed' && job.sessionId === state.sessionId;
+  });
+
+  if (completed && state.sessionId) {
+    const session = await api(`/sessions/${state.sessionId}`);
+    renderMessages(session.messages ?? []);
+    await loadSessions();
+  }
+}
+
+async function loadJobArtifacts(jobId) {
+  const container = document.querySelector(`[data-job-artifacts="${CSS.escape(jobId)}"]`);
+
+  if (!container) return;
+
+  const artifacts = await api(`/background-jobs/${jobId}/artifacts`);
+  container.innerHTML = artifacts.map(artifact => `
+    <a href="/background-jobs/${escapeHtml(jobId)}/artifacts/${escapeHtml(artifact.id)}" target="_blank" rel="noreferrer">${escapeHtml(artifact.title)}</a>
+  `).join('');
 }
 
 async function loadTaskGraph() {

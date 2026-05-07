@@ -51,6 +51,48 @@ public sealed class QdrantVectorStore(
         return new MemoryUpsertResponse(id, request.Collection);
     }
 
+    public async Task<MemoryBatchUpsertResponse> UpsertBatchAsync(MemoryBatchUpsertRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Collection))
+        {
+            throw new ArgumentException("Collection is required.", nameof(request));
+        }
+
+        var items = request.Items
+            .Where(item => !string.IsNullOrWhiteSpace(item.Text))
+            .ToList();
+
+        if (items.Count == 0)
+        {
+            return new MemoryBatchUpsertResponse([], request.Collection);
+        }
+
+        var collection = NormalizeCollection(request.Collection);
+        var embeddings = new List<float[]>(items.Count);
+
+        foreach (var item in items)
+        {
+            embeddings.Add(await embeddingGenerator.GenerateAsync(item.Text, cancellationToken));
+        }
+
+        await EnsureCollectionAsync(collection, embeddings[0].Length, cancellationToken);
+
+        var ids = items.Select(_ => Guid.NewGuid().ToString("D")).ToList();
+        var points = items.Select((item, index) => new QdrantPoint(
+            Id: ids[index],
+            Vector: embeddings[index],
+            Payload: new Dictionary<string, object?>
+            {
+                ["collection"] = request.Collection,
+                ["text"] = item.Text,
+                ["metadata"] = item.Metadata ?? new Dictionary<string, string>()
+            })).ToList();
+        var response = await Client.PutAsJsonAsync($"/collections/{Uri.EscapeDataString(collection)}/points?wait=true", new QdrantUpsertRequest(points), JsonOptions, cancellationToken);
+
+        await ThrowIfFailedAsync(response, "Qdrant batch point upsert", cancellationToken);
+        return new MemoryBatchUpsertResponse(ids, request.Collection);
+    }
+
     public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(MemorySearchRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Collection) || string.IsNullOrWhiteSpace(request.Query))
@@ -85,6 +127,30 @@ public sealed class QdrantVectorStore(
             .ToList();
     }
 
+    public async Task<MemoryCountResponse> CountAsync(MemoryCountRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Collection))
+        {
+            return new MemoryCountResponse(request.Collection, 0);
+        }
+
+        var collection = NormalizeCollection(request.Collection);
+
+        if (!await CollectionExistsAsync(collection, cancellationToken))
+        {
+            return new MemoryCountResponse(request.Collection, 0);
+        }
+
+        var response = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(collection)}/points/count", new QdrantCountRequest(
+            Exact: true,
+            Filter: BuildFilter(request.Filter)), JsonOptions, cancellationToken);
+        await ThrowIfFailedAsync(response, $"Qdrant count for {collection}", cancellationToken);
+        var count = await response.Content.ReadFromJsonAsync<QdrantCountResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Qdrant returned an empty count response.");
+
+        return new MemoryCountResponse(request.Collection, count.Result.Count);
+    }
+
     public async Task<MemoryStatsResponse> GetStatsAsync(CancellationToken cancellationToken)
     {
         var response = await Client.GetAsync("/collections", cancellationToken);
@@ -96,7 +162,7 @@ public sealed class QdrantVectorStore(
         foreach (var collection in collections.Result.Collections)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var countResponse = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(collection.Name)}/points/count", new QdrantCountRequest(true), JsonOptions, cancellationToken);
+            var countResponse = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(collection.Name)}/points/count", new QdrantCountRequest(Exact: true), JsonOptions, cancellationToken);
             await ThrowIfFailedAsync(countResponse, $"Qdrant count for {collection.Name}", cancellationToken);
             var count = await countResponse.Content.ReadFromJsonAsync<QdrantCountResponse>(JsonOptions, cancellationToken)
                 ?? throw new InvalidOperationException("Qdrant returned an empty count response.");
@@ -212,7 +278,9 @@ public sealed class QdrantVectorStore(
 
     private sealed record QdrantCollectionInfo([property: JsonPropertyName("name")] string Name);
 
-    private sealed record QdrantCountRequest([property: JsonPropertyName("exact")] bool Exact);
+    private sealed record QdrantCountRequest(
+        [property: JsonPropertyName("exact")] bool Exact,
+        [property: JsonPropertyName("filter")] QdrantFilter? Filter = null);
 
     private sealed record QdrantCountResponse([property: JsonPropertyName("result")] QdrantCountResult Result);
 

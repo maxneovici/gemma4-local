@@ -12,5 +12,7 @@ data/**/*.json
 data/documents/*
 src/**/data/**/*.json
 src/**/data/documents/*
+src/**/data/background-job-artifacts/*
+data/background-job-artifacts/*
 !data/**/.gitkeep
 !src/**/data/**/.gitkeep

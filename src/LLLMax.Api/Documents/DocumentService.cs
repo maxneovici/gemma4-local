@@ -1,3 +1,5 @@
+using System.Security.Cryptography;
+using System.Text;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
@@ -61,23 +63,49 @@ public sealed class DocumentService(
             .ToList();
 
         var chunks = 0;
-
+        var skippedFiles = 0;
         var filesProcessed = 0;
 
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var text = await File.ReadAllTextAsync(file, cancellationToken);
+            var contentHash = ContentHash(text);
+            var relativePath = Path.GetRelativePath(folder, file);
 
-            foreach (var chunk in Chunk(text, _options.Documents.ChunkSizeCharacters))
+            if (await IsAlreadyVectorizedAsync(request.Collection, contentHash, cancellationToken))
             {
-                chunks++;
-                var metadata = BuildDocumentMetadata(request, folder, file);
+                skippedFiles++;
+                filesProcessed++;
 
-                await memoryStore.UpsertAsync(new MemoryUpsertRequest(
-                    Collection: request.Collection,
-                    Text: chunk,
-                    Metadata: metadata), cancellationToken);
+                if (onProgress is not null)
+                {
+                    await onProgress(new DocumentVectorizeProgress(
+                        FilesProcessed: filesProcessed,
+                        FileCount: files.Count,
+                        ChunksWritten: chunks,
+                        CurrentFile: relativePath,
+                        SkippedFileCount: skippedFiles), cancellationToken);
+                }
+
+                continue;
+            }
+
+            var items = new List<MemoryUpsertItem>();
+            var chunkIndex = 0;
+            var fileChunks = Chunk(text, _options.Documents.ChunkSizeCharacters).ToList();
+
+            foreach (var chunk in fileChunks)
+            {
+                var metadata = BuildDocumentMetadata(request, folder, file, contentHash, chunkIndex, fileChunks.Count);
+                items.Add(new MemoryUpsertItem(chunk, metadata));
+                chunkIndex++;
+            }
+
+            if (items.Count > 0)
+            {
+                var response = await memoryStore.UpsertBatchAsync(new MemoryBatchUpsertRequest(request.Collection, items), cancellationToken);
+                chunks += response.Ids.Count;
             }
 
             filesProcessed++;
@@ -88,11 +116,12 @@ public sealed class DocumentService(
                     FilesProcessed: filesProcessed,
                     FileCount: files.Count,
                     ChunksWritten: chunks,
-                    CurrentFile: Path.GetRelativePath(folder, file)), cancellationToken);
+                    CurrentFile: relativePath,
+                    SkippedFileCount: skippedFiles), cancellationToken);
             }
         }
 
-        return new DocumentVectorizeResponse(request.Collection, files.Count, chunks);
+        return new DocumentVectorizeResponse(request.Collection, files.Count, chunks, skippedFiles);
     }
 
     public async Task<OcrResponse> ExtractTextAsync(OcrRequest request, CancellationToken cancellationToken)
@@ -156,7 +185,18 @@ public sealed class DocumentService(
     private string ResolveVisionModel(string? model) =>
         model ?? _options.VisionModel ?? _options.DefaultModel;
 
-    private static IReadOnlyDictionary<string, string> BuildDocumentMetadata(DocumentVectorizeRequest request, string folder, string file)
+    private async Task<bool> IsAlreadyVectorizedAsync(string collection, string contentHash, CancellationToken cancellationToken)
+    {
+        var count = await memoryStore.CountAsync(new MemoryCountRequest(collection, new Dictionary<string, string>
+        {
+            ["contentHash"] = contentHash,
+            ["kind"] = "document_chunk"
+        }), cancellationToken);
+
+        return count.Count > 0;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildDocumentMetadata(DocumentVectorizeRequest request, string folder, string file, string contentHash, int chunkIndex, int chunkCount)
     {
         var relativePath = Path.GetRelativePath(folder, file);
         var relativeDirectory = Path.GetDirectoryName(relativePath);
@@ -166,6 +206,9 @@ public sealed class DocumentService(
             ["sourceFile"] = Path.GetFileName(file),
             ["sourceRelativePath"] = relativePath,
             ["sourceDirectory"] = string.IsNullOrWhiteSpace(relativeDirectory) ? "." : relativeDirectory,
+            ["contentHash"] = contentHash,
+            ["chunkIndex"] = chunkIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            ["chunkCount"] = chunkCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["kind"] = "document_chunk"
         };
 
@@ -203,5 +246,11 @@ public sealed class DocumentService(
         {
             yield return text.Substring(index, Math.Min(size, text.Length - index));
         }
+    }
+
+    private static string ContentHash(string text)
+    {
+        var bytes = SHA256.HashData(Encoding.UTF8.GetBytes(text));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
     }
 }

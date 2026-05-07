@@ -46,6 +46,52 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
         return new MemoryUpsertResponse(id, request.Collection);
     }
 
+    public async Task<MemoryBatchUpsertResponse> UpsertBatchAsync(MemoryBatchUpsertRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Collection))
+        {
+            throw new ArgumentException("Collection is required.", nameof(request));
+        }
+
+        var records = new List<MemoryRecord>();
+
+        foreach (var item in request.Items)
+        {
+            if (string.IsNullOrWhiteSpace(item.Text))
+            {
+                continue;
+            }
+
+            records.Add(new MemoryRecord(
+                Id: Guid.NewGuid().ToString("n"),
+                Collection: request.Collection,
+                Text: item.Text,
+                Vector: await embeddingGenerator.GenerateAsync(item.Text, cancellationToken),
+                Metadata: item.Metadata ?? new Dictionary<string, string>()));
+        }
+
+        if (records.Count == 0)
+        {
+            return new MemoryBatchUpsertResponse([], request.Collection);
+        }
+
+        var gate = GetLock(request.Collection);
+        await gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            var existing = await ReadCollectionAsync(request.Collection, cancellationToken);
+            existing.AddRange(records);
+            await WriteCollectionAsync(request.Collection, existing, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        return new MemoryBatchUpsertResponse(records.Select(record => record.Id).ToList(), request.Collection);
+    }
+
     public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(MemorySearchRequest request, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Collection) || string.IsNullOrWhiteSpace(request.Query))
@@ -83,6 +129,29 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
             .OrderByDescending(result => result.Score)
             .Take(Math.Clamp(request.Limit, 1, 50))
             .ToList();
+    }
+
+    public async Task<MemoryCountResponse> CountAsync(MemoryCountRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Collection))
+        {
+            return new MemoryCountResponse(request.Collection, 0);
+        }
+
+        var gate = GetLock(request.Collection);
+        await gate.WaitAsync(cancellationToken);
+        List<MemoryRecord> records;
+
+        try
+        {
+            records = await ReadCollectionAsync(request.Collection, cancellationToken);
+        }
+        finally
+        {
+            gate.Release();
+        }
+
+        return new MemoryCountResponse(request.Collection, records.Count(record => MatchesFilter(record.Metadata, request.Filter)));
     }
 
     public async Task<MemoryStatsResponse> GetStatsAsync(CancellationToken cancellationToken)
