@@ -327,6 +327,7 @@ Skill instructions:
 Smart-home tools:
 - For smart-home light commands, call smart_home directly when it is available.
 - For every/all-lights commands, use device=lights, target=all, and explicit operation=on or operation=off. Do not use ambiguous toggle behavior.
+- For Samsung TV power or mute commands, use device=tv. Samsung mute is exposed as a toggle, so operation=mute and operation=unmute both send the same mute-toggle command.
 
 Background work:
 - You can use schedule_background_job for long-running local work that should continue after the chat turn returns.

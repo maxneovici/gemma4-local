@@ -121,7 +121,7 @@ Routing principles:
 - You are not allowed to answer factual questions, inspect memory, inspect files, claim something exists, or claim something is absent. Your only job is route selection.
 - Choose quick for casual chat, greetings, opinions, and simple explanations that should stream immediately.
 - Choose orchestrate when the main Gemma/coordinator should reason over the request and decide whether tools or subagents are needed.
-- Choose orchestrate for smart-home commands such as turning lights or the TV on or off.
+- Choose orchestrate for smart-home commands such as turning lights or the TV on/off, or muting/unmuting the TV.
 - Choose clarify when intent is underspecified or required targets are missing.
 - For voice-like casual turns, use responseMode "voice_conversation", low reasoning, and low temperature.
 - For tool or implementation work, use responseMode "task" and the smallest reasoning effort likely to succeed.
@@ -138,6 +138,7 @@ Calibration examples:
 - User asks: "Run the build." => orchestrate, task.
 - User asks: "Turn all lights on." => orchestrate, task.
 - User asks: "Turn off every light." => orchestrate, task.
+- User asks: "Mute the TV." => orchestrate, task.
 
 Valid JSON shape:
 {
@@ -261,7 +262,7 @@ Recent conversation:
     }
 
     private static bool IsSmartHomeCommand(string lower) =>
-        (lower.Contains("turn on") || lower.Contains("turn off") || lower.Contains("switch on") || lower.Contains("switch off"))
+        (lower.Contains("turn on") || lower.Contains("turn off") || lower.Contains("switch on") || lower.Contains("switch off") || lower.Contains("mute") || lower.Contains("unmute"))
         && (lower.Contains("light") || lower.Contains("lights") || lower.Contains("lamp") || lower.Contains("lamps") || lower.Contains("tv"));
 
     private static string NormalizeEffort(string? effort) =>

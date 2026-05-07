@@ -17,7 +17,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
 
     public override string Name => "smart_home";
 
-    public override string Description => "Control configured smart-home devices on the local network. For Philips Hue, use device=lights, operation=on/off, and target=all to turn every configured light on or off.";
+    public override string Description => "Control configured smart-home devices on the local network. For Philips Hue, use device=lights, operation=on/off, and target=all to turn every configured light on or off. For Samsung TV, use device=tv with operation=on/off/toggle_power/mute.";
 
     protected override async Task<LocalToolResult> InvokeAsync(SmartHomeArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
@@ -158,8 +158,11 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
             case "power" or "toggle_power" or "toggle":
                 await SendSamsungTvKeyAsync(tv, "KEY_POWER", cancellationToken);
                 return new LocalToolResult("Samsung TV power-toggle command sent.");
+            case "mute" or "unmute" or "toggle_mute":
+                await SendSamsungTvKeyAsync(tv, "KEY_MUTE", cancellationToken);
+                return new LocalToolResult("Samsung TV mute-toggle command sent. Samsung exposes mute as a toggle, so mute and unmute use the same command.");
             default:
-                throw new ArgumentException("Samsung TV operation must be on, off, or toggle_power.");
+                throw new ArgumentException("Samsung TV operation must be on, off, toggle_power, or mute.");
         }
     }
 
