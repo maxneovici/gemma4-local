@@ -1,4 +1,5 @@
 using System.Text.Json;
+using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
 using Microsoft.Extensions.Options;
@@ -9,6 +10,7 @@ public sealed class FileAssistantSessionStore(LocalDataPaths paths, IOptions<Loc
 {
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
     private readonly LocalAiOptions _options = options.Value;
+    private readonly SemaphoreSlim _gate = new(1, 1);
 
     public async Task<AssistantSession> CreateAsync(SessionCreateRequest request, CancellationToken cancellationToken)
     {
@@ -71,8 +73,94 @@ public sealed class FileAssistantSessionStore(LocalDataPaths paths, IOptions<Loc
 
     public async Task SaveAsync(AssistantSession session, CancellationToken cancellationToken)
     {
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            var merged = File.Exists(GetPath(session.Id))
+                ? MergeMessages(session, await GetUnsafeAsync(session.Id, cancellationToken))
+                : session;
+            await SaveUnsafeAsync(merged, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task AppendMessageAsync(string id, LocalChatMessage message, CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            var session = await GetUnsafeAsync(id, cancellationToken);
+            var messages = session.Messages.Concat([message]).ToList();
+            await SaveUnsafeAsync(session with { Messages = messages, UpdatedAt = DateTimeOffset.UtcNow }, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task SaveUnsafeAsync(AssistantSession session, CancellationToken cancellationToken)
+    {
         await using var stream = File.Create(GetPath(session.Id));
         await JsonSerializer.SerializeAsync(stream, session, JsonOptions, cancellationToken);
+    }
+
+    private static AssistantSession MergeMessages(AssistantSession incoming, AssistantSession persisted)
+    {
+        if (persisted.Messages.Count == 0)
+        {
+            return incoming;
+        }
+
+        if (incoming.Messages.SequenceEqual(persisted.Messages.Take(incoming.Messages.Count)))
+        {
+            return incoming with
+            {
+                Messages = [.. incoming.Messages, .. persisted.Messages.Skip(incoming.Messages.Count)],
+                UpdatedAt = Max(incoming.UpdatedAt, persisted.UpdatedAt)
+            };
+        }
+
+        var incomingKeys = incoming.Messages.Select(MessageKey).ToHashSet(StringComparer.Ordinal);
+        var outOfBandMessages = persisted.Messages
+            .Where(message => !incomingKeys.Contains(MessageKey(message)))
+            .ToList();
+
+        if (outOfBandMessages.Count > 0)
+        {
+            return incoming with
+            {
+                Messages = [.. incoming.Messages, .. outOfBandMessages],
+                UpdatedAt = Max(incoming.UpdatedAt, persisted.UpdatedAt)
+            };
+        }
+
+        return incoming;
+    }
+
+    private static DateTimeOffset Max(DateTimeOffset left, DateTimeOffset right) =>
+        left >= right ? left : right;
+
+    private static string MessageKey(LocalChatMessage message) => $"{message.Role}\u001f{message.Content}";
+
+    private async Task<AssistantSession> GetUnsafeAsync(string id, CancellationToken cancellationToken)
+    {
+        var file = GetPath(id);
+
+        if (!File.Exists(file))
+        {
+            throw new InvalidOperationException($"Session '{id}' does not exist.");
+        }
+
+        await using var stream = File.OpenRead(file);
+
+        return await JsonSerializer.DeserializeAsync<AssistantSession>(stream, JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException($"Session '{id}' could not be read.");
     }
 
     public Task DeleteAllAsync(CancellationToken cancellationToken)

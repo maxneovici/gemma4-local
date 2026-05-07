@@ -3,6 +3,7 @@ using LLLMax.Api.Endpoints;
 using LLLMax.Api.Options;
 using LLLMax.Api.Agents;
 using LLLMax.Api.Approvals;
+using LLLMax.Api.BackgroundJobs;
 using LLLMax.Api.Documents;
 using LLLMax.Api.Integrations;
 using LLLMax.Api.Mcp;
@@ -77,6 +78,7 @@ builder.Services.AddSingleton<ILocalTool, MemoryWriteTool>();
 builder.Services.AddSingleton<ILocalTool, WebBrowseTool>();
 builder.Services.AddSingleton<ILocalTool, ApiIntegrationTool>();
 builder.Services.AddSingleton<ILocalTool, DocumentVectorizeTool>();
+builder.Services.AddSingleton<ILocalTool, ScheduleBackgroundJobTool>();
 builder.Services.AddSingleton<ILocalTool, OcrTool>();
 builder.Services.AddSingleton<ILocalTool, InvoiceExtractionTool>();
 builder.Services.AddSingleton<ILocalTool, SafeShellCommandTool>();
@@ -97,6 +99,12 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, ApiIntegrationRegistry>();
 builder.Services.AddSingleton<IAssistantSessionStore, FileAssistantSessionStore>();
+builder.Services.AddSingleton<IBackgroundJobQueue, ChannelBackgroundJobQueue>();
+builder.Services.AddSingleton<IBackgroundJobStore, FileBackgroundJobStore>();
+builder.Services.AddSingleton<BackgroundJobService>();
+builder.Services.AddSingleton<IBackgroundJobService>(serviceProvider => serviceProvider.GetRequiredService<BackgroundJobService>());
+builder.Services.AddSingleton<IBackgroundJobHandler, DocumentVectorizationJobHandler>();
+builder.Services.AddSingleton<IBackgroundJobHandler, MemoryReportJobHandler>();
 builder.Services.AddSingleton<ITaskGraphStore, FileTaskGraphStore>();
 builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
@@ -105,6 +113,7 @@ builder.Services.AddSingleton<IRoutingEvaluationService, RoutingEvaluationServic
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();
 builder.Services.AddHostedService<LocalModelSetupHostedService>();
+builder.Services.AddHostedService<BackgroundJobWorker>();
 
 var app = builder.Build();
 
@@ -123,6 +132,7 @@ app.MapAgentEndpoints();
 app.MapApprovalEndpoints();
 app.MapMcpEndpoints();
 app.MapMemoryEndpoints();
+app.MapBackgroundJobEndpoints();
 app.MapRoutingEndpoints();
 app.MapSessionEndpoints();
 app.MapTaskGraphEndpoints();

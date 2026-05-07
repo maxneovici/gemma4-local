@@ -21,6 +21,8 @@ public sealed class LocalDataPaths(IOptions<LocalAiOptions> options, IWebHostEnv
 
     public string ConsolidationJobsDirectory => Ensure(Path.Combine(Root, "consolidation-jobs"));
 
+    public string BackgroundJobsDirectory => Ensure(Path.Combine(Root, "background-jobs"));
+
     public string ApprovalsDirectory => Ensure(Path.Combine(Root, "approvals"));
 
     public string ApiRegistryPath => Path.Combine(Root, _options.ApiDiscovery.StorageFile);

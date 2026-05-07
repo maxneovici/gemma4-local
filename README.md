@@ -367,6 +367,47 @@ curl http://localhost:5220/documents/vectorize-folder \
 
 Every document chunk stores `kind=document_chunk`, `source`, `sourceFile`, `sourceRelativePath`, `sourceDirectory`, and any supplied `tenant`, `category`, or custom metadata. Retrieval filters are applied by the vector store, not by prompt instruction, so a contracts-only query cannot return non-contract chunks when `filter.category=contracts` is set.
 
+### Background Jobs
+
+Long-running work should be scheduled as background jobs so the main chat loop remains available. The built-in worker runs up to `LocalAi:Orchestration:MaxConcurrentBackgroundJobs` jobs at a time; the default is `3`.
+
+Current background-capable task:
+
+- `document_vectorize_folder`: vectorize large local document folders into Qdrant with progress, cancellation, and session completion notifications.
+- `memory_report`: retrieve scoped Qdrant/local memory chunks and generate a markdown report with the local model.
+
+Good future background job candidates:
+
+- batch OCR and invoice extraction
+- deep web research with multiple browsed sources
+- local build/test/benchmark runs
+- large API synchronization from explicitly registered integrations
+- memory consolidation and re-embedding migrations
+- report generation over many retrieved documents
+- local artifact downloads from approved URLs with checksum verification
+
+Schedule a document vectorization job:
+
+```bash
+curl http://localhost:5220/background-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"document_vectorize_folder","title":"Vectorize contracts","payload":{"folderPath":"data/documents/contracts","collection":"documents","tenant":"personal","category":"contracts"}}'
+```
+
+Inspect active jobs:
+
+```bash
+curl http://localhost:5220/background-jobs
+```
+
+Schedule a report over scoped memory:
+
+```bash
+curl http://localhost:5220/background-jobs \
+  -H "Content-Type: application/json" \
+  -d '{"kind":"memory_report","title":"Contract risk report","payload":{"collection":"documents","query":"renewal indemnity liability","filter":{"tenant":"personal","category":"contracts"},"instruction":"Summarize renewal windows and liability caps with source filenames."}}'
+```
+
 ### Embeddings
 
 Use a dedicated embedding model rather than a chat model. Recommended local default:

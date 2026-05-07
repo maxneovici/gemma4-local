@@ -42,7 +42,10 @@ public sealed class DocumentService(
         return new DocumentUploadResponse(id, safeName, file.Length, path);
     }
 
-    public async Task<DocumentVectorizeResponse> VectorizeFolderAsync(DocumentVectorizeRequest request, CancellationToken cancellationToken)
+    public async Task<DocumentVectorizeResponse> VectorizeFolderAsync(
+        DocumentVectorizeRequest request,
+        CancellationToken cancellationToken,
+        Func<DocumentVectorizeProgress, CancellationToken, Task>? onProgress = null)
     {
         var folder = paths.Resolve(request.FolderPath);
         EnsureFolderAllowed(folder);
@@ -59,6 +62,8 @@ public sealed class DocumentService(
 
         var chunks = 0;
 
+        var filesProcessed = 0;
+
         foreach (var file in files)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -73,6 +78,17 @@ public sealed class DocumentService(
                     Collection: request.Collection,
                     Text: chunk,
                     Metadata: metadata), cancellationToken);
+            }
+
+            filesProcessed++;
+
+            if (onProgress is not null)
+            {
+                await onProgress(new DocumentVectorizeProgress(
+                    FilesProcessed: filesProcessed,
+                    FileCount: files.Count,
+                    ChunksWritten: chunks,
+                    CurrentFile: Path.GetRelativePath(folder, file)), cancellationToken);
             }
         }
 

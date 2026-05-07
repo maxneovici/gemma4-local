@@ -6,6 +6,7 @@ const state = {
   tools: [],
   agents: [],
   taskGraph: null,
+  backgroundJobs: [],
   consolidationJobs: [],
   approvals: [],
   mcpServers: []
@@ -202,6 +203,31 @@ async function loadConsolidationJobs() {
   `).join('') || '<p class="muted">No consolidation jobs yet.</p>';
 }
 
+async function loadBackgroundJobs() {
+  state.backgroundJobs = await api('/background-jobs');
+  const recent = state.backgroundJobs.slice(0, 8);
+  $('backgroundJobs').innerHTML = recent.map(job => {
+    const total = job.progressTotal || 0;
+    const current = job.progressCurrent || 0;
+    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+    const canCancel = job.status === 'queued' || job.status === 'running';
+    return `
+      <div class="background-job ${escapeHtml(job.status)}">
+        <div class="job-title"><strong>${escapeHtml(job.title ?? job.kind)}</strong><span>${escapeHtml(job.status)}</span></div>
+        <progress value="${escapeHtml(String(current))}" max="${escapeHtml(String(Math.max(total, current, 1)))}"></progress>
+        <span>${escapeHtml(total > 0 ? `${current}/${total} · ${percent}%` : 'waiting')}</span>
+        <p>${escapeHtml(job.statusMessage ?? '')}</p>
+        ${job.error ? `<em>${escapeHtml(job.error)}</em>` : ''}
+        ${canCancel ? `<button data-cancel-job="${escapeHtml(job.id)}" type="button">Cancel</button>` : ''}
+      </div>
+    `;
+  }).join('') || '<p class="muted">No background jobs yet.</p>';
+
+  document.querySelectorAll('[data-cancel-job]').forEach(button => {
+    button.addEventListener('click', () => cancelBackgroundJob(button.dataset.cancelJob));
+  });
+}
+
 async function loadTaskGraph() {
   if (!state.sessionId) {
     renderTaskGraph(null);
@@ -260,7 +286,7 @@ async function newSession() {
   $('sessionTitle').textContent = session.title;
   renderMessages(session.messages ?? []);
   await Promise.all([loadSessions(), loadMemoryStats()]);
-  await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -271,7 +297,7 @@ async function deleteAllSessions() {
     $('sessionTitle').textContent = 'Ready';
     renderMessages([]);
     renderTaskGraph(null);
-    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs()]);
     await newSession();
   }, 'Deleting sessions...');
 }
@@ -282,7 +308,7 @@ async function openSession(id) {
   $('sessionTitle').textContent = session.title;
   $('modelSelect').value = session.model ?? '';
   renderMessages(session.messages ?? []);
-  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -314,7 +340,7 @@ async function sendMessage(event) {
     renderMessages(result.messages);
     renderMetrics(result.metrics);
     renderSteps(result.reasoningSteps);
-    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
     $('sendButton').disabled = false;
@@ -585,6 +611,13 @@ async function consolidateSession() {
   }, 'Consolidating memory...');
 }
 
+async function cancelBackgroundJob(id) {
+  await guarded(async () => {
+    await api(`/background-jobs/${id}/cancel`, { method: 'POST' });
+    await loadBackgroundJobs();
+  }, 'Cancelling background job...');
+}
+
 async function decideApproval(id, approve, scope = 'once') {
   await guarded(async () => {
     await api(`/approvals/${id}/${approve ? 'approve' : 'reject'}`, {
@@ -657,7 +690,7 @@ renderMetrics(null);
 renderSteps([]);
 
 await guarded(async () => {
-  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 
   if (state.sessions[0]) {
@@ -666,3 +699,9 @@ await guarded(async () => {
     await newSession();
   }
 }, 'Bootstrapping local runtime...');
+
+setInterval(() => {
+  if (document.visibilityState === 'visible') {
+    loadBackgroundJobs().catch(() => {});
+  }
+}, 3000);

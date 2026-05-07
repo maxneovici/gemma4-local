@@ -12,6 +12,8 @@ public sealed record DocumentVectorizeRequest(
 
 public sealed record DocumentVectorizeResponse(string Collection, int FileCount, int ChunkCount);
 
+public sealed record DocumentVectorizeProgress(int FilesProcessed, int FileCount, int ChunksWritten, string CurrentFile);
+
 public sealed record OcrRequest(string DocumentId, string? Prompt = null, string? Model = null);
 
 public sealed record OcrResponse(string DocumentId, string Text, string Model);

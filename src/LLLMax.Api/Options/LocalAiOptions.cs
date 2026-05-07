@@ -116,6 +116,8 @@ public sealed class LocalAiOrchestrationOptions
 
     public int MaxDelegationDepth { get; init; } = 3;
 
+    public int MaxConcurrentBackgroundJobs { get; init; } = 3;
+
     public int ContextMaxEstimatedTokens { get; init; } = 200000;
 
     public int ContextSummaryTriggerPercent { get; init; } = 80;
