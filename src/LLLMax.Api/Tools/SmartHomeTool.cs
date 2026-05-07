@@ -283,6 +283,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(_options.SmartHome.RequestTimeoutSeconds));
         await socket.ConnectAsync(uriBuilder.Uri, timeout.Token);
+        await WaitForSamsungTvRemoteReadyAsync(socket, timeout.Token);
 
         var payload = JsonSerializer.Serialize(new
         {
@@ -297,6 +298,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
         }, JsonOptions);
 
         await socket.SendAsync(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, true, timeout.Token);
+        await ThrowIfSamsungTvRemoteRejectedAsync(socket, timeout.Token);
 
         if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
         {
@@ -314,6 +316,94 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
             }
         }
     }
+
+    private static async Task WaitForSamsungTvRemoteReadyAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        while (socket.State == WebSocketState.Open)
+        {
+            var message = await ReceiveSamsungTvMessageAsync(socket, cancellationToken);
+
+            if (message is null)
+            {
+                continue;
+            }
+
+            var remoteEvent = GetSamsungTvEvent(message);
+
+            if (remoteEvent?.Equals("ms.channel.connect", StringComparison.OrdinalIgnoreCase) == true)
+            {
+                return;
+            }
+
+            if (IsSamsungTvRemoteError(remoteEvent))
+            {
+                throw new InvalidOperationException($"Samsung TV remote authorization failed: {message}");
+            }
+        }
+
+        throw new InvalidOperationException("Samsung TV remote websocket closed before authorization completed.");
+    }
+
+    private static async Task ThrowIfSamsungTvRemoteRejectedAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        timeout.CancelAfter(TimeSpan.FromMilliseconds(750));
+
+        try
+        {
+            var message = await ReceiveSamsungTvMessageAsync(socket, timeout.Token);
+            var remoteEvent = message is null ? null : GetSamsungTvEvent(message);
+
+            if (IsSamsungTvRemoteError(remoteEvent))
+            {
+                throw new InvalidOperationException($"Samsung TV remote command was rejected: {message}");
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            // Samsung does not acknowledge successful remote keys.
+        }
+    }
+
+    private static async Task<string?> ReceiveSamsungTvMessageAsync(ClientWebSocket socket, CancellationToken cancellationToken)
+    {
+        var buffer = new byte[8192];
+        using var stream = new MemoryStream();
+        WebSocketReceiveResult result;
+
+        do
+        {
+            result = await socket.ReceiveAsync(buffer, cancellationToken);
+
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                return null;
+            }
+
+            stream.Write(buffer, 0, result.Count);
+        } while (!result.EndOfMessage);
+
+        return result.MessageType == WebSocketMessageType.Text
+            ? Encoding.UTF8.GetString(stream.ToArray())
+            : null;
+    }
+
+    private static string? GetSamsungTvEvent(string message)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(message);
+            return document.RootElement.TryGetProperty("event", out var remoteEvent) ? remoteEvent.GetString() : null;
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
+    }
+
+    private static bool IsSamsungTvRemoteError(string? remoteEvent) =>
+        remoteEvent?.Equals("ms.error", StringComparison.OrdinalIgnoreCase) == true
+        || remoteEvent?.Equals("ms.channel.unauthorized", StringComparison.OrdinalIgnoreCase) == true;
 
     private static async Task SendWakeOnLanAsync(string macAddress, int port, CancellationToken cancellationToken)
     {
