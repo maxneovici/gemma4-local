@@ -16,6 +16,61 @@ public static class AgentEndpoints
             AllowedTools: agent.AllowedTools ?? [],
             AllowedAgents: agent.AllowedAgents ?? []))));
 
+        group.MapGet("/{name}/prompt", (string name, IAgentRegistry agentRegistry) =>
+        {
+            if (agentRegistry is not MarkdownAgentRegistry markdownRegistry)
+            {
+                return Results.Problem("Prompt overrides are only supported by the markdown agent registry.");
+            }
+
+            try
+            {
+                return Results.Ok(markdownRegistry.GetPrompt(name));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.NotFound(new { Error = exception.Message });
+            }
+        });
+
+        group.MapPut("/{name}/prompt", (string name, AgentPromptOverrideRequest request, IAgentRegistry agentRegistry) =>
+        {
+            if (agentRegistry is not MarkdownAgentRegistry markdownRegistry)
+            {
+                return Results.Problem("Prompt overrides are only supported by the markdown agent registry.");
+            }
+
+            try
+            {
+                return Results.Ok(markdownRegistry.SavePromptOverride(name, request));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.NotFound(new { Error = exception.Message });
+            }
+            catch (ArgumentException exception)
+            {
+                return Results.BadRequest(new { Error = exception.Message });
+            }
+        });
+
+        group.MapDelete("/{name}/prompt", (string name, IAgentRegistry agentRegistry) =>
+        {
+            if (agentRegistry is not MarkdownAgentRegistry markdownRegistry)
+            {
+                return Results.Problem("Prompt overrides are only supported by the markdown agent registry.");
+            }
+
+            try
+            {
+                return Results.Ok(markdownRegistry.ResetPromptOverride(name));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.NotFound(new { Error = exception.Message });
+            }
+        });
+
         group.MapGet("/tools", (ILocalToolRegistry toolRegistry) => Results.Ok(toolRegistry.GetTools().Select(tool => new
         {
             tool.Name,

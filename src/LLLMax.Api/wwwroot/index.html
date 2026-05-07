@@ -34,6 +34,30 @@
       </div>
     </section>
   </div>
+  <div id="agentPromptModal" class="modal-overlay" hidden>
+    <section class="modal-card prompt-modal-card">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">Agent personality</p>
+          <h2 id="agentPromptTitle">System Prompt</h2>
+        </div>
+        <button id="cancelAgentPrompt" type="button">Cancel</button>
+      </header>
+      <div class="modal-body prompt-modal-body">
+        <p class="panel-help">This override is saved locally in SQLite and applied immediately when the agent runs. Keep routing and tool orchestration rules intact when experimenting with personality.</p>
+        <textarea id="agentPromptText" rows="18" spellcheck="false"></textarea>
+        <details class="memory-add">
+          <summary>Base prompt</summary>
+          <pre id="agentBasePrompt"></pre>
+        </details>
+        <div class="button-row">
+          <button id="saveAgentPrompt" class="primary" type="button">Save</button>
+          <button id="resetAgentPrompt" type="button">Reset</button>
+          <button id="closeAgentPrompt" type="button">Cancel</button>
+        </div>
+      </div>
+    </section>
+  </div>
   <main class="shell">
     <aside class="panel left-panel">
       <div class="brand">
@@ -61,6 +85,10 @@
       <details class="panel-section">
         <summary>Tools</summary>
         <div id="tools" class="tool-list"></div>
+      </details>
+      <details class="panel-section">
+        <summary>Skills</summary>
+        <div id="skills" class="tool-list"></div>
       </details>
       <details class="panel-section" open>
         <summary>Approvals</summary>

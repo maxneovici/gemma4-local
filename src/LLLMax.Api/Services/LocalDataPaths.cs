@@ -15,6 +15,8 @@ public sealed class LocalDataPaths(IOptions<LocalAiOptions> options, IWebHostEnv
 
     public string AgentsDirectory => Ensure(Path.Combine(Root, "agents"));
 
+    public string SkillsDirectory => Ensure(Path.Combine(Root, "skills"));
+
     public string SessionsDirectory => Ensure(Path.Combine(Root, "sessions"));
 
     public string SqliteDatabasePath => Path.Combine(EnsureRoot(), "lllmax.db");

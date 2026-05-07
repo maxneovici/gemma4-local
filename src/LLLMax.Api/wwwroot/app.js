@@ -4,6 +4,7 @@ const state = {
   models: [],
   sessions: [],
   tools: [],
+  skills: [],
   agents: [],
   taskGraph: null,
   backgroundJobs: [],
@@ -23,7 +24,8 @@ const state = {
   patchProposals: [],
   currentMessages: [],
   isStreaming: false,
-  activeAssistantId: null
+  activeAssistantId: null,
+  editingAgent: null
 };
 
 let knownJobStates = new Map();
@@ -261,8 +263,55 @@ async function loadModels() {
 async function loadAgents() {
   state.agents = await api('/agents');
   $('agents').innerHTML = state.agents.map(agent => `
-    <button type="button" title="${escapeHtml(agent.description)}">${escapeHtml(agent.name)}<br><small>${agent.allowedTools.length} tools</small></button>
+    <button data-edit-agent-prompt="${escapeHtml(agent.name)}" type="button" title="${escapeHtml(agent.description)}">${escapeHtml(agent.name)}<br><small>${agent.allowedTools.length} tools · edit prompt</small></button>
   `).join('');
+
+  document.querySelectorAll('[data-edit-agent-prompt]').forEach(button => {
+    button.addEventListener('click', () => openAgentPrompt(button.dataset.editAgentPrompt));
+  });
+}
+
+async function openAgentPrompt(name) {
+  await guarded(async () => {
+    const prompt = await api(`/agents/${encodeURIComponent(name)}/prompt`);
+    state.editingAgent = prompt;
+    $('agentPromptTitle').textContent = `${prompt.name} system prompt`;
+    $('agentPromptText').value = prompt.effectiveSystemPrompt ?? '';
+    $('agentBasePrompt').textContent = prompt.baseSystemPrompt ?? '';
+    $('resetAgentPrompt').disabled = !prompt.hasOverride;
+    $('agentPromptModal').hidden = false;
+  }, 'Opening agent prompt...', { overlay: false });
+}
+
+function closeAgentPromptModal() {
+  $('agentPromptModal').hidden = true;
+  state.editingAgent = null;
+}
+
+async function saveAgentPrompt() {
+  if (!state.editingAgent) return;
+
+  await guarded(async () => {
+    const result = await api(`/agents/${encodeURIComponent(state.editingAgent.name)}/prompt`, {
+      method: 'PUT',
+      body: JSON.stringify({ systemPrompt: $('agentPromptText').value })
+    });
+    state.editingAgent = result;
+    closeAgentPromptModal();
+    await loadAgents();
+  }, 'Saving agent prompt...');
+}
+
+async function resetAgentPrompt() {
+  if (!state.editingAgent || !confirm(`Reset ${state.editingAgent.name} to its base prompt?`)) return;
+
+  await guarded(async () => {
+    const result = await api(`/agents/${encodeURIComponent(state.editingAgent.name)}/prompt`, { method: 'DELETE' });
+    state.editingAgent = result;
+    $('agentPromptText').value = result.effectiveSystemPrompt ?? '';
+    $('resetAgentPrompt').disabled = true;
+    await loadAgents();
+  }, 'Resetting agent prompt...');
 }
 
 async function loadTools() {
@@ -274,6 +323,17 @@ async function loadTools() {
       <code>${escapeHtml(JSON.parse(tool.argumentsJsonSchema).title ?? 'schema')}</code>
     </details>
   `).join('');
+}
+
+async function loadSkills() {
+  state.skills = await api('/skills');
+  $('skills').innerHTML = state.skills.map(skill => `
+    <details>
+      <summary>${escapeHtml(skill.name)} <small>${escapeHtml(String(skill.priority))}</small></summary>
+      <p>${escapeHtml(skill.description)}</p>
+      <code>${escapeHtml((skill.triggers ?? []).slice(0, 5).join(', ') || 'no triggers')}</code>
+    </details>
+  `).join('') || '<p class="muted">No skills found.</p>';
 }
 
 async function loadApprovals() {
@@ -1007,7 +1067,7 @@ async function sendMessage(event) {
     if (assistantTrace) {
       selectMessageTrace(assistantTrace[0]);
     }
-    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers(), loadTools()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers(), loadTools(), loadSkills()]);
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
     $('sendButton').disabled = false;
@@ -1473,6 +1533,13 @@ $('qdrantModal').addEventListener('click', event => {
   if (event.target.id === 'qdrantModal') closeQdrantBrowser();
 });
 $('registerMcp').addEventListener('click', registerMcp);
+$('saveAgentPrompt').addEventListener('click', saveAgentPrompt);
+$('resetAgentPrompt').addEventListener('click', resetAgentPrompt);
+$('cancelAgentPrompt').addEventListener('click', closeAgentPromptModal);
+$('closeAgentPrompt').addEventListener('click', closeAgentPromptModal);
+$('agentPromptModal').addEventListener('click', event => {
+  if (event.target.id === 'agentPromptModal') closeAgentPromptModal();
+});
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
@@ -1481,7 +1548,7 @@ if ('serviceWorker' in navigator) {
 clearResponseDetails();
 
 await guarded(async () => {
-  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
+  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSkills(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
   await newSession();
 }, 'Bootstrapping local runtime...');

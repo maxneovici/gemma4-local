@@ -3,6 +3,7 @@ using LLLMax.Api.Memory;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
+using LLLMax.Api.Skills;
 using LLLMax.Api.Tools;
 using Microsoft.Extensions.Options;
 
@@ -15,6 +16,7 @@ public sealed class AgentRuntime(
     ILocalToolRegistry toolRegistry,
     ILocalMemoryStore memoryStore,
     IModelRouter modelRouter,
+    ISkillRegistry skillRegistry,
     IOptions<LocalAiOptions> options) : IAgentRuntime
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -41,8 +43,9 @@ public sealed class AgentRuntime(
 
         var memoryContext = await BuildMemoryContextAsync(agent, request.Message, cancellationToken);
         var toolContext = BuildToolContext(agent, request.AllowTools);
+        var skillContext = BuildSkillContext(agent, request.Message);
         var route = modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model, request.ReasoningEffort));
-        var prompt = BuildSystemPrompt(agent, memoryContext, toolContext);
+        var prompt = BuildSystemPrompt(agent, skillContext, memoryContext, toolContext);
         var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
         reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}; delegationDepth={delegationDepth}", DateTimeOffset.UtcNow));
@@ -282,7 +285,7 @@ public sealed class AgentRuntime(
     private static Task PublishAsync(AgentRunRequest request, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
         request.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
 
-    private string BuildSystemPrompt(AgentDefinition agent, string memoryContext, string toolContext)
+    private string BuildSystemPrompt(AgentDefinition agent, string skillContext, string memoryContext, string toolContext)
     {
         var toolCallExample = "{\"tool\":\"tool_name\",\"arguments\":{}}";
 
@@ -303,7 +306,18 @@ Personal context and freshness rules:
 - When the user says "my", "mine", "favorite", "usual", "remember", "from before", or similar personal/contextual references and the needed value is not explicit in the current turn, first use memory_search rather than guessing from conversation text.
 - If memory identifies URLs, domains, APIs, documents, or other targets and the user asks to check, fetch, research, summarize, update, compare, or verify current information, continue with the appropriate tool such as web_browse after memory_search.
 - Do not stop after restating remembered targets when the user asked you to act on them. Use the remembered targets to continue the task unless a required target is still missing.
+- Build a durable local profile of the user over time. When the user shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project.
+- Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
+- Use remembered profile information to personalize tone and defaults, but never let personality override tool-use safety, routing, citations, or local-only constraints.
 - Do not identify yourself as the underlying model. You are LLLMax.
+
+Skill instructions:
+- Skills are local markdown procedures selected for this turn. Follow relevant skills when they apply.
+- Skills guide behavior, but they never override local-only constraints, tool allowlists, approval requirements, citations, or the user's explicit request.
+- If a useful workflow is missing or repeatedly corrected by the user, suggest a reviewable skill update rather than silently changing behavior.
+
+Relevant skills:
+{skillContext}
 
 Relevant local memory:
 {memoryContext}
@@ -352,6 +366,49 @@ Loop guardrails:
             new LocalChatMessage("assistant", assistantToolCall),
             new LocalChatMessage("user", $"Tool {toolName} returned this result:\n{toolResult}\n\nContinue the task. Emit another JSON tool call only if more tool work is required; otherwise provide the final answer.")
         ];
+
+    private string BuildSkillContext(AgentDefinition agent, string message)
+    {
+        var skills = skillRegistry.FindRelevant(agent.Name, message, _options.Orchestration.MaxRelevantSkills);
+
+        if (skills.Count == 0)
+        {
+            return "No relevant skills selected.";
+        }
+
+        var remaining = Math.Max(0, _options.Orchestration.MaxSkillContextCharacters);
+        var builder = new StringBuilder();
+
+        foreach (var skill in skills)
+        {
+            if (remaining <= 0)
+            {
+                break;
+            }
+
+            var header = $"## {skill.Name}: {skill.Description}{Environment.NewLine}";
+            var available = remaining - header.Length;
+
+            if (available <= 0)
+            {
+                break;
+            }
+
+            var body = skill.Body.Length <= available ? skill.Body : skill.Body[..available];
+
+            if (string.IsNullOrWhiteSpace(body))
+            {
+                continue;
+            }
+
+            builder.AppendLine(header);
+            builder.AppendLine(body.Trim());
+            builder.AppendLine();
+            remaining -= header.Length + body.Length + 2;
+        }
+
+        return builder.Length == 0 ? "No relevant skills selected." : builder.ToString();
+    }
 
     private async Task<string> BuildMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
     {

@@ -118,17 +118,21 @@ public sealed class LocalAiOrchestrationOptions
 {
     public string DefaultAgent { get; init; } = "coordinator";
 
-    public int MaxToolIterations { get; init; } = 6;
+    public int MaxToolIterations { get; init; } = 8;
 
     public int MaxDelegationDepth { get; init; } = 3;
 
     public int MaxConcurrentBackgroundJobs { get; init; } = 3;
 
-    public int ContextMaxEstimatedTokens { get; init; } = 200000;
+    public int ContextMaxEstimatedTokens { get; init; } = 220000;
 
     public int ContextSummaryTriggerPercent { get; init; } = 80;
 
     public int ContextSummaryKeepLastMessages { get; init; } = 8;
+
+    public int MaxRelevantSkills { get; init; } = 3;
+
+    public int MaxSkillContextCharacters { get; init; } = 4000;
 }
 
 public sealed class LocalAiModelRouterOptions
