@@ -101,6 +101,8 @@ builder.Services.AddSingleton<ILocalTool, WorkspaceReadTool>();
 builder.Services.AddSingleton<ILocalTool, WorkspaceWriteTool>();
 builder.Services.AddSingleton<ILocalTool, GitInspectTool>();
 builder.Services.AddSingleton<ILocalTool, PatchProposalTool>();
+builder.Services.AddSingleton<ILocalTool, CreateSkillTool>();
+builder.Services.AddSingleton<ILocalTool, UpdateSkillTool>();
 builder.Services.AddSingleton<IEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 {

@@ -28,5 +28,6 @@ Use this when the user asks for repository inspection, implementation, UI change
 - Prefer minimal, targeted changes.
 - Preserve existing design language and architecture.
 - Use safe allowlisted commands for verification, especially `dotnet build` and targeted tests when applicable.
+- Use `schedule_background_job` for large verification or research tasks that should continue outside the chat turn.
 - Do not use unrestricted shell tools or broaden command allowlists without explicit approval.
 - Report what changed and what verification passed or failed.

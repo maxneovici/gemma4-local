@@ -246,6 +246,8 @@ public sealed class AgentRuntime(
             "workspace_write" => $"Preparing write to {arguments.GetValueOrDefault("path") ?? "workspace file"}...",
             "git_inspect" => "Inspecting git state...",
             "propose_patch" => "Preparing patch proposal...",
+            "create_skill" => $"Preparing skill {arguments.GetValueOrDefault("name") ?? "definition"}...",
+            "update_skill" => $"Preparing skill update for {arguments.GetValueOrDefault("name") ?? "definition"}...",
             _ when toolName.StartsWith("mcp_", StringComparison.OrdinalIgnoreCase) => $"Calling MCP tool {toolName}...",
             _ => $"Calling {toolName}..."
         };
@@ -266,6 +268,8 @@ public sealed class AgentRuntime(
             "workspace_write" => "Workspace write submitted. Reviewing result...",
             "git_inspect" => "Git inspection complete. Reviewing state...",
             "propose_patch" => "Patch proposal saved. Reviewing result...",
+            "create_skill" => "Skill creation step complete. Reviewing result...",
+            "update_skill" => "Skill update step complete. Reviewing result...",
             _ => $"{toolName} complete. Reviewing result..."
         };
 
@@ -314,7 +318,14 @@ Personal context and freshness rules:
 Skill instructions:
 - Skills are local markdown procedures selected for this turn. Follow relevant skills when they apply.
 - Skills guide behavior, but they never override local-only constraints, tool allowlists, approval requirements, citations, or the user's explicit request.
-- If a useful workflow is missing or repeatedly corrected by the user, suggest a reviewable skill update rather than silently changing behavior.
+- If a useful workflow is missing or the user asks you to remember a workflow, use create_skill when available to create an approval-gated local markdown skill.
+- If an existing skill should change, use update_skill when available instead of generic workspace writes.
+- Skill creation and updates require approval. If approval is required, ask the user to approve it and retry the same tool with only the approvalId.
+
+Background work:
+- You can use schedule_background_job for long-running local work that should continue after the chat turn returns.
+- Available background job kinds include document_vectorize_folder, memory_report, and web_research. Provide the payload expected by the job kind.
+- Skill create/update tools are foreground approval-gated operations today; use background jobs for large research or verification that informs a skill.
 
 Relevant skills:
 {skillContext}
