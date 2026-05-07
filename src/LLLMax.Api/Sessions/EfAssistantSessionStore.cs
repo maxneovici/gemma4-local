@@ -220,7 +220,9 @@ public sealed class EfAssistantSessionStore(
             Content = message.Content,
             TraceId = message.TraceId,
             ReasoningStepsJson = message.ReasoningSteps is null ? null : JsonSerializer.Serialize(message.ReasoningSteps, JsonOptions),
-            TaskGraphJson = message.TaskGraph is null ? null : JsonSerializer.Serialize(message.TaskGraph, JsonOptions)
+            TaskGraphJson = message.TaskGraph is null ? null : JsonSerializer.Serialize(message.TaskGraph, JsonOptions),
+            ToolTracesJson = message.ToolTraces is null ? null : JsonSerializer.Serialize(message.ToolTraces, JsonOptions),
+            CitationsJson = message.Citations is null ? null : JsonSerializer.Serialize(message.Citations, JsonOptions)
         };
 
     private static AssistantSession ToModel(SessionEntity entity) =>
@@ -239,7 +241,9 @@ public sealed class EfAssistantSessionStore(
                     Content: message.Content,
                     TraceId: message.TraceId,
                     ReasoningSteps: message.ReasoningStepsJson is null ? null : JsonSerializer.Deserialize<IReadOnlyList<ReasoningStep>>(message.ReasoningStepsJson, JsonOptions),
-                    TaskGraph: message.TaskGraphJson is null ? null : JsonSerializer.Deserialize<TaskGraph>(message.TaskGraphJson, JsonOptions)))
+                    TaskGraph: message.TaskGraphJson is null ? null : JsonSerializer.Deserialize<TaskGraph>(message.TaskGraphJson, JsonOptions),
+                    ToolTraces: message.ToolTracesJson is null ? null : JsonSerializer.Deserialize<IReadOnlyList<ToolTraceEntry>>(message.ToolTracesJson, JsonOptions),
+                    Citations: message.CitationsJson is null ? null : JsonSerializer.Deserialize<IReadOnlyList<CitationSource>>(message.CitationsJson, JsonOptions)))
                 .ToList());
 
     private static AssistantSession MergeMessages(AssistantSession incoming, AssistantSession persisted)

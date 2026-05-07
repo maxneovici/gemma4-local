@@ -11,4 +11,6 @@ public sealed record LocalToolInvocation(
     int DelegationDepth,
     Func<AgentRuntimeEvent, CancellationToken, Task>? OnEvent = null);
 
-public sealed record LocalToolResult(string Content);
+public sealed record LocalToolResult(
+    string Content,
+    IReadOnlyList<CitationSource>? Citations = null);

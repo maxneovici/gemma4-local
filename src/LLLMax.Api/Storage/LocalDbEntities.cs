@@ -38,6 +38,10 @@ public sealed class SessionMessageEntity
 
     public string? TaskGraphJson { get; set; }
 
+    public string? ToolTracesJson { get; set; }
+
+    public string? CitationsJson { get; set; }
+
     public SessionEntity? Session { get; set; }
 }
 

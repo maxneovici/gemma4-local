@@ -20,7 +20,9 @@ public sealed record LocalChatMessage(
     string Content,
     string? TraceId = null,
     IReadOnlyList<ReasoningStep>? ReasoningSteps = null,
-    TaskGraph? TaskGraph = null);
+    TaskGraph? TaskGraph = null,
+    IReadOnlyList<ToolTraceEntry>? ToolTraces = null,
+    IReadOnlyList<CitationSource>? Citations = null);
 
 public sealed record LocalChatResponse(
     string Model,

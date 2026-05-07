@@ -98,7 +98,7 @@ function renderMessage(message, index) {
     return `<div class="message user" data-raw="${escapeHtml(raw)}">${escapeHtml(raw)}</div>`;
   }
 
-  const hasTrace = Boolean(message.reasoningSteps?.length || message.taskGraph);
+  const hasTrace = Boolean(message.reasoningSteps?.length || message.taskGraph || message.toolTraces?.length || message.citations?.length);
 
   if (!hasTrace) {
     return `<div class="message assistant" data-raw="${escapeHtml(raw)}"><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
@@ -108,7 +108,9 @@ function renderMessage(message, index) {
   state.messageTraces.set(traceId, {
     message,
     graph: message.taskGraph ?? null,
-    reasoningSteps: message.reasoningSteps ?? []
+    reasoningSteps: message.reasoningSteps ?? [],
+    toolTraces: message.toolTraces ?? [],
+    citations: message.citations ?? []
   });
 
   return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"><div class="markdown-body">${renderMarkdown(raw)}</div>${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
@@ -174,7 +176,36 @@ function selectMessageTrace(traceId) {
 
   const trace = state.messageTraces.get(traceId);
   renderTaskGraph(trace?.graph ?? null, trace ? 'No task graph was recorded for this message.' : 'Select an assistant message to inspect its task graph.');
+  renderToolTraces(trace?.toolTraces ?? []);
+  renderCitations(trace?.citations ?? []);
   renderSteps(trace?.reasoningSteps ?? []);
+}
+
+function renderToolTraces(toolTraces) {
+  $('toolTraces').innerHTML = toolTraces?.length
+    ? toolTraces.map(trace => `
+      <details class="tool-trace ${escapeHtml(trace.status ?? '')}">
+        <summary><strong>${escapeHtml(trace.tool)}</strong><span>${escapeHtml(trace.status ?? 'unknown')}${trace.durationMs ? ` · ${Math.round(trace.durationMs)}ms` : ''}</span></summary>
+        ${trace.arguments ? `<pre>args: ${escapeHtml(JSON.stringify(trace.arguments, null, 2))}</pre>` : ''}
+        ${trace.result ? `<pre>${escapeHtml(trace.result)}</pre>` : ''}
+        ${trace.error ? `<pre>${escapeHtml(trace.error)}</pre>` : ''}
+      </details>
+    `).join('')
+    : '<p class="muted">No tool calls recorded for this message.</p>';
+}
+
+function renderCitations(citations) {
+  $('citations').innerHTML = citations?.length
+    ? citations.map(citation => {
+      const title = citation.url
+        ? `<a href="${escapeHtml(citation.url)}" target="_blank" rel="noreferrer">${escapeHtml(citation.title)}</a>`
+        : escapeHtml(citation.title);
+      const detail = [citation.kind, citation.source, citation.chunk ? `chunk ${citation.chunk}` : null, citation.score ? `score ${Number(citation.score).toFixed(3)}` : null]
+        .filter(Boolean)
+        .join(' · ');
+      return `<div class="citation"><strong>${title}</strong><span>${escapeHtml(detail)}</span></div>`;
+    }).join('')
+    : '<p class="muted">No citations recorded for this message.</p>';
 }
 
 async function loadModels() {
@@ -1121,6 +1152,8 @@ if ('serviceWorker' in navigator) {
 }
 
 renderMetrics(null);
+renderToolTraces([]);
+renderCitations([]);
 renderSteps([]);
 
 await guarded(async () => {

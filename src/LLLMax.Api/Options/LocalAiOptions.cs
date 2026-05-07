@@ -99,6 +99,12 @@ public sealed class LocalToolOptions
 
     public int ShellTimeoutSeconds { get; init; } = 120;
 
+    public bool EnableWorkspaceTools { get; init; } = true;
+
+    public IReadOnlyList<string> WorkspaceRoots { get; init; } = ["."];
+
+    public int WorkspaceMaxReadBytes { get; init; } = 120000;
+
     public IReadOnlyList<string> AllowedShellCommands { get; init; } =
     [
         "dotnet build",

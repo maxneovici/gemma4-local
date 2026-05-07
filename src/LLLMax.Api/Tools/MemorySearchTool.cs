@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using LLLMax.Api.Agents;
 using LLLMax.Api.Memory;
 
 namespace LLLMax.Api.Tools;
@@ -19,7 +20,9 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
             return new LocalToolResult("No matching local memories found.");
         }
 
-        return new LocalToolResult(string.Join(Environment.NewLine + Environment.NewLine, results.Select(FormatResult)));
+        return new LocalToolResult(
+            string.Join(Environment.NewLine + Environment.NewLine, results.Select(FormatResult)),
+            results.Select(ToCitation).ToList());
     }
 
     private static string FormatResult(MemorySearchResult result)
@@ -41,6 +44,20 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
     private static string? GetMetadata(MemorySearchResult result, string key) =>
         result.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+    private static CitationSource ToCitation(MemorySearchResult result)
+    {
+        var source = GetMetadata(result, "sourceFile") ?? GetMetadata(result, "source") ?? result.Id;
+        var chunk = GetMetadata(result, "chunkIndex");
+        var kind = GetMetadata(result, "kind") ?? "memory";
+
+        return new CitationSource(
+            Kind: kind.Equals("document_chunk", StringComparison.OrdinalIgnoreCase) ? "document" : "memory",
+            Title: chunk is null ? source : $"{source} chunk {chunk}",
+            Source: source,
+            Chunk: chunk,
+            Score: result.Score);
+    }
 }
 
 public sealed record MemorySearchArguments(

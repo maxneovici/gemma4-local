@@ -62,6 +62,11 @@ builder.Services.AddHttpClient("qdrant", (serviceProvider, client) =>
 
 builder.Services.AddSingleton<LocalDataPaths>();
 builder.Services.AddSingleton<LocalEndpointGuard>();
+builder.Services.AddSingleton<WorkspaceToolSupport>(serviceProvider =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>().Value;
+    return new WorkspaceToolSupport(options, serviceProvider.GetRequiredService<IWebHostEnvironment>());
+});
 builder.Services.AddDbContextFactory<LocalDbContext>((serviceProvider, options) =>
 {
     var paths = serviceProvider.GetRequiredService<LocalDataPaths>();
@@ -89,6 +94,9 @@ builder.Services.AddSingleton<ILocalTool, ScheduleBackgroundJobTool>();
 builder.Services.AddSingleton<ILocalTool, OcrTool>();
 builder.Services.AddSingleton<ILocalTool, InvoiceExtractionTool>();
 builder.Services.AddSingleton<ILocalTool, SafeShellCommandTool>();
+builder.Services.AddSingleton<ILocalTool, WorkspaceSearchTool>();
+builder.Services.AddSingleton<ILocalTool, WorkspaceReadTool>();
+builder.Services.AddSingleton<ILocalTool, WorkspaceWriteTool>();
 builder.Services.AddSingleton<IEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 {

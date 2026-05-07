@@ -42,7 +42,9 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             ? text
             : text[.._options.WebBrowsing.MaxResponseCharacters];
 
-        return new LocalToolResult($"URL: {uri}\n\n{content}");
+        return new LocalToolResult(
+            $"URL: {uri}\n\n{content}",
+            [new CitationSource("web", uri.Host, Url: uri.ToString(), Source: uri.ToString())]);
     }
 
     private static string StripHtml(string text) =>

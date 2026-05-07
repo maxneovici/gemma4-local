@@ -31,11 +31,31 @@ public sealed record AgentRunResponse(
     AgentRunMetrics? Metrics = null,
     IReadOnlyList<ReasoningStep>? ReasoningSteps = null,
     bool TaskComplete = true,
-    string? SessionId = null);
+    string? SessionId = null,
+    IReadOnlyList<ToolTraceEntry>? ToolTraces = null,
+    IReadOnlyList<CitationSource>? Citations = null);
 
 public sealed record ToolExecutionResult(string Tool, string Result);
 
 public sealed record ReasoningStep(string Kind, string Content, DateTimeOffset CreatedAt);
+
+public sealed record ToolTraceEntry(
+    string Tool,
+    string Status,
+    IReadOnlyDictionary<string, string>? Arguments,
+    string? Result,
+    string? Error,
+    DateTimeOffset StartedAt,
+    DateTimeOffset? CompletedAt = null,
+    double? DurationMs = null);
+
+public sealed record CitationSource(
+    string Kind,
+    string Title,
+    string? Url = null,
+    string? Source = null,
+    string? Chunk = null,
+    double? Score = null);
 
 public sealed record AgentRunMetrics(
     string Model,
