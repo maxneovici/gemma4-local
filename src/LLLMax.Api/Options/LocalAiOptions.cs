@@ -78,7 +78,7 @@ public sealed class LocalMemoryOptions
 {
     public bool Enabled { get; init; } = true;
 
-    public string Provider { get; init; } = "File";
+    public string Provider { get; init; } = "Qdrant";
 
     public string EmbeddingModel { get; init; } = "nomic-embed-text";
 

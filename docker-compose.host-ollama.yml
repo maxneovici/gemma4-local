@@ -12,6 +12,7 @@ services:
       LocalAi__ManageProcess: "false"
       LocalAi__BlockStartupUntilModelsReady: "false"
       LocalAi__Memory__QdrantBaseUrl: http://qdrant:6333
+      LocalAi__Memory__Provider: Qdrant
       LocalAi__DataDirectory: /app/data
     depends_on:
       qdrant:

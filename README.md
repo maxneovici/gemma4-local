@@ -327,7 +327,7 @@ The memory architecture has two abstractions:
 - `IEmbeddingGenerator` creates vectors locally.
 - `ILocalMemoryStore` stores and searches vectors.
 
-The default store is `FileVectorStore`, which persists vectorized memories under `data/memory` between sessions. `InMemoryVectorStore` remains available with `LocalAi:Memory:Provider=InMemory` for experiments and tests.
+The default store is `QdrantVectorStore`, which persists vectorized memories in local Qdrant. `FileVectorStore` remains available with `LocalAi:Memory:Provider=File` for lightweight JSON persistence, and `InMemoryVectorStore` remains available with `LocalAi:Memory:Provider=InMemory` for experiments and tests.
 
 Store memory:
 
@@ -344,6 +344,28 @@ curl http://localhost:5220/memory/search \
   -H "Content-Type: application/json" \
   -d '{"collection":"coordinator","query":"persistent vector database","limit":3}'
 ```
+
+Hard-filter memory by exact metadata fields:
+
+```bash
+curl http://localhost:5220/memory/search \
+  -H "Content-Type: application/json" \
+  -d '{"collection":"documents","query":"termination liability","limit":5,"filter":{"category":"contracts","tenant":"personal"}}'
+```
+
+### Document Scoping
+
+Use collections for coarse domains and metadata filters for hard boundaries. For example, contracts can live in the `documents` collection with `category=contracts`, or in a dedicated `contracts` collection if you prefer physical separation.
+
+Vectorize a contracts folder with scope metadata:
+
+```bash
+curl http://localhost:5220/documents/vectorize-folder \
+  -H "Content-Type: application/json" \
+  -d '{"folderPath":"data/documents/contracts","collection":"documents","searchPattern":"*.txt","tenant":"personal","category":"contracts"}'
+```
+
+Every document chunk stores `kind=document_chunk`, `source`, `sourceFile`, `sourceRelativePath`, `sourceDirectory`, and any supplied `tenant`, `category`, or custom metadata. Retrieval filters are applied by the vector store, not by prompt instruction, so a contracts-only query cannot return non-contract chunks when `filter.category=contracts` is set.
 
 ### Embeddings
 
@@ -370,7 +392,7 @@ Qdrant endpoints:
 - HTTP: `http://127.0.0.1:6333`
 - gRPC: `http://127.0.0.1:6334`
 
-The app currently keeps Qdrant available in Docker for the next persistent-vector-store implementation. The default file-backed store gives immediate local persistence without requiring a database.
+Qdrant is the default persistent vector store. Use `LocalAi:Memory:Provider=File` only when you explicitly want file-backed memory without a database.
 
 ## OpenAI Compatibility
 

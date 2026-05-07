@@ -74,6 +74,7 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
         var queryVector = await embeddingGenerator.GenerateAsync(request.Query, cancellationToken);
 
         return records
+            .Where(record => MatchesFilter(record.Metadata, request.Filter))
             .Select(record => new MemorySearchResult(
                 Id: record.Id,
                 Text: record.Text,
@@ -154,4 +155,9 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
             ? 0
             : dot / (Math.Sqrt(leftMagnitude) * Math.Sqrt(rightMagnitude));
     }
+
+    private static bool MatchesFilter(IReadOnlyDictionary<string, string> metadata, IReadOnlyDictionary<string, string>? filter) =>
+        filter is null
+        || filter.Count == 0
+        || filter.All(pair => metadata.TryGetValue(pair.Key, out var value) && value.Equals(pair.Value, StringComparison.OrdinalIgnoreCase));
 }

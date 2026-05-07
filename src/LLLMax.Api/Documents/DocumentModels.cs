@@ -2,7 +2,13 @@ namespace LLLMax.Api.Documents;
 
 public sealed record DocumentUploadResponse(string Id, string FileName, long Bytes, string Path);
 
-public sealed record DocumentVectorizeRequest(string FolderPath, string Collection = "documents", string SearchPattern = "*.*");
+public sealed record DocumentVectorizeRequest(
+    string FolderPath,
+    string Collection = "documents",
+    string SearchPattern = "*.*",
+    string? Tenant = null,
+    string? Category = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
 
 public sealed record DocumentVectorizeResponse(string Collection, int FileCount, int ChunkCount);
 

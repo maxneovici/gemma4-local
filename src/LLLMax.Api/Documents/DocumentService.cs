@@ -54,6 +54,7 @@ public sealed class DocumentService(
 
         var files = Directory.EnumerateFiles(folder, request.SearchPattern, SearchOption.AllDirectories)
             .Where(file => TextExtensions.Contains(Path.GetExtension(file)))
+            .OrderBy(file => Path.GetRelativePath(folder, file), StringComparer.OrdinalIgnoreCase)
             .ToList();
 
         var chunks = 0;
@@ -66,14 +67,12 @@ public sealed class DocumentService(
             foreach (var chunk in Chunk(text, _options.Documents.ChunkSizeCharacters))
             {
                 chunks++;
+                var metadata = BuildDocumentMetadata(request, folder, file);
+
                 await memoryStore.UpsertAsync(new MemoryUpsertRequest(
                     Collection: request.Collection,
                     Text: chunk,
-                    Metadata: new Dictionary<string, string>
-                    {
-                        ["source"] = file,
-                        ["kind"] = "document_chunk"
-                    }), cancellationToken);
+                    Metadata: metadata), cancellationToken);
             }
         }
 
@@ -140,6 +139,32 @@ public sealed class DocumentService(
 
     private string ResolveVisionModel(string? model) =>
         model ?? _options.VisionModel ?? _options.DefaultModel;
+
+    private static IReadOnlyDictionary<string, string> BuildDocumentMetadata(DocumentVectorizeRequest request, string folder, string file)
+    {
+        var relativePath = Path.GetRelativePath(folder, file);
+        var relativeDirectory = Path.GetDirectoryName(relativePath);
+        var metadata = new Dictionary<string, string>(request.Metadata ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase)
+        {
+            ["source"] = file,
+            ["sourceFile"] = Path.GetFileName(file),
+            ["sourceRelativePath"] = relativePath,
+            ["sourceDirectory"] = string.IsNullOrWhiteSpace(relativeDirectory) ? "." : relativeDirectory,
+            ["kind"] = "document_chunk"
+        };
+
+        if (!string.IsNullOrWhiteSpace(request.Tenant))
+        {
+            metadata["tenant"] = request.Tenant.Trim();
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.Category))
+        {
+            metadata["category"] = request.Category.Trim();
+        }
+
+        return metadata;
+    }
 
     private void EnsureFolderAllowed(string folder)
     {

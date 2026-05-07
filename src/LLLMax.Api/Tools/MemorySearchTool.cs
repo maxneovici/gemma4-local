@@ -12,7 +12,7 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
     protected override async Task<LocalToolResult> InvokeAsync(MemorySearchArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
         var collection = arguments.Collection ?? invocation.Agent.Name;
-        var results = await memoryStore.SearchAsync(new MemorySearchRequest(collection, arguments.Query, arguments.Limit ?? 5), cancellationToken);
+        var results = await memoryStore.SearchAsync(new MemorySearchRequest(collection, arguments.Query, arguments.Limit ?? 5, arguments.Filter), cancellationToken);
 
         if (results.Count == 0)
         {
@@ -23,4 +23,8 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
     }
 }
 
-public sealed record MemorySearchArguments([property: Required] string Query, string? Collection = null, int? Limit = null);
+public sealed record MemorySearchArguments(
+    [property: Required] string Query,
+    string? Collection = null,
+    int? Limit = null,
+    IReadOnlyDictionary<string, string>? Filter = null);

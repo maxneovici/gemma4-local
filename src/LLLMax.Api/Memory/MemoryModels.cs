@@ -5,7 +5,11 @@ public sealed record MemoryUpsertRequest(
     string Text,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
-public sealed record MemorySearchRequest(string Collection, string Query, int Limit = 5);
+public sealed record MemorySearchRequest(
+    string Collection,
+    string Query,
+    int Limit = 5,
+    IReadOnlyDictionary<string, string>? Filter = null);
 
 public sealed record MemoryRecord(
     string Id,

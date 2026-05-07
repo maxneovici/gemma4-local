@@ -50,6 +50,13 @@ builder.Services.AddHttpClient("integrations", (serviceProvider, client) =>
     client.Timeout = TimeSpan.FromSeconds(options.ApiDiscovery.RequestTimeoutSeconds);
 });
 
+builder.Services.AddHttpClient("qdrant", (serviceProvider, client) =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>().Value;
+    client.BaseAddress = new Uri(options.Memory.QdrantBaseUrl);
+    client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
+});
+
 builder.Services.AddSingleton<LocalDataPaths>();
 builder.Services.AddSingleton<LocalEndpointGuard>();
 builder.Services.AddSingleton<IApprovalStore, FileApprovalStore>();
@@ -77,9 +84,15 @@ builder.Services.AddSingleton<IEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 {
     var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>().Value;
-    return options.Memory.Provider.Equals("InMemory", StringComparison.OrdinalIgnoreCase)
-        ? new InMemoryVectorStore(serviceProvider.GetRequiredService<IEmbeddingGenerator>())
-        : new FileVectorStore(serviceProvider.GetRequiredService<IEmbeddingGenerator>(), serviceProvider.GetRequiredService<LocalDataPaths>());
+    return options.Memory.Provider switch
+    {
+        var provider when provider.Equals("InMemory", StringComparison.OrdinalIgnoreCase) => new InMemoryVectorStore(serviceProvider.GetRequiredService<IEmbeddingGenerator>()),
+        var provider when provider.Equals("Qdrant", StringComparison.OrdinalIgnoreCase) => new QdrantVectorStore(
+            serviceProvider.GetRequiredService<IHttpClientFactory>(),
+            serviceProvider.GetRequiredService<IEmbeddingGenerator>(),
+            serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>()),
+        _ => new FileVectorStore(serviceProvider.GetRequiredService<IEmbeddingGenerator>(), serviceProvider.GetRequiredService<LocalDataPaths>())
+    };
 });
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, ApiIntegrationRegistry>();

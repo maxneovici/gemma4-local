@@ -15,10 +15,19 @@ public sealed class DocumentVectorizeTool(IDocumentService documentService) : Lo
         var response = await documentService.VectorizeFolderAsync(new DocumentVectorizeRequest(
             FolderPath: arguments.FolderPath,
             Collection: arguments.Collection ?? "documents",
-            SearchPattern: arguments.SearchPattern ?? "*.*"), cancellationToken);
+            SearchPattern: arguments.SearchPattern ?? "*.*",
+            Tenant: arguments.Tenant,
+            Category: arguments.Category,
+            Metadata: arguments.Metadata), cancellationToken);
 
         return new LocalToolResult(JsonSerializer.Serialize(response));
     }
 }
 
-public sealed record DocumentVectorizeArguments([property: Required] string FolderPath, string? Collection = null, string? SearchPattern = null);
+public sealed record DocumentVectorizeArguments(
+    [property: Required] string FolderPath,
+    string? Collection = null,
+    string? SearchPattern = null,
+    string? Tenant = null,
+    string? Category = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
