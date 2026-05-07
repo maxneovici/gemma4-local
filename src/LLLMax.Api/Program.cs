@@ -108,7 +108,7 @@ builder.Services.AddSingleton<IApiIntegrationRegistry, EfApiIntegrationRegistry>
 builder.Services.AddSingleton<IAssistantSessionStore, EfAssistantSessionStore>();
 builder.Services.AddSingleton<IBackgroundJobQueue, ChannelBackgroundJobQueue>();
 builder.Services.AddSingleton<IBackgroundJobStore, EfBackgroundJobStore>();
-builder.Services.AddSingleton<IBackgroundJobArtifactStore, FileBackgroundJobArtifactStore>();
+builder.Services.AddSingleton<IBackgroundJobArtifactStore, EfBackgroundJobArtifactStore>();
 builder.Services.AddSingleton<BackgroundJobService>();
 builder.Services.AddSingleton<IBackgroundJobService>(serviceProvider => serviceProvider.GetRequiredService<BackgroundJobService>());
 builder.Services.AddSingleton<IBackgroundJobHandler, DocumentVectorizationJobHandler>();

@@ -67,7 +67,7 @@ public sealed class AssistantOrchestrator(
 
         var completedGraph = await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, agentResponse.ReasoningSteps ?? [], cancellationToken);
         var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
-        var assistantMessage = new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, completedGraph);
+        var assistantMessage = new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, taskGraphs.SnapshotCurrentTurn(completedGraph));
         var nextMessages = messages.Concat([assistantMessage]).ToList();
         await sessions.SaveAsync(session with
         {
@@ -167,7 +167,7 @@ public sealed class AssistantOrchestrator(
 
                 var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
                 var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
-                var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, graph)]).ToList();
+                var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, graph is null ? null : taskGraphs.SnapshotCurrentTurn(graph))]).ToList();
                 await sessions.SaveAsync(session with
                 {
                     Agent = request.Agent ?? session.Agent,
@@ -242,7 +242,7 @@ public sealed class AssistantOrchestrator(
         var response = responseBuilder.ToString();
         var reasoningSteps = WithToolDecision(toolDecision, [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]);
         var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, response, reasoningSteps, cancellationToken);
-        var nextMessages = messages.Concat([new LocalChatMessage("assistant", response, Guid.NewGuid().ToString("n"), reasoningSteps, graph)]).ToList();
+        var nextMessages = messages.Concat([new LocalChatMessage("assistant", response, Guid.NewGuid().ToString("n"), reasoningSteps, taskGraphs.SnapshotCurrentTurn(graph))]).ToList();
         var metrics = new AgentRunMetrics(
             Model: finalChunk?.Model ?? route.Model,
             ReasoningEffort: route.ReasoningEffort,
@@ -321,7 +321,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, finalText, toolResponse.ReasoningSteps, cancellationToken);
-        var rewrittenMessages = session.Messages.Take(session.Messages.Count - 1).Concat([new LocalChatMessage("assistant", finalText, Guid.NewGuid().ToString("n"), toolResponse.ReasoningSteps, graph)]).ToList();
+        var rewrittenMessages = session.Messages.Take(session.Messages.Count - 1).Concat([new LocalChatMessage("assistant", finalText, Guid.NewGuid().ToString("n"), toolResponse.ReasoningSteps, taskGraphs.SnapshotCurrentTurn(graph))]).ToList();
         await sessions.SaveAsync(session with { Messages = rewrittenMessages, UpdatedAt = DateTimeOffset.UtcNow }, cancellationToken);
         var metrics = new AgentRunMetrics(
             Model: finalChunk?.Model ?? route.Model,

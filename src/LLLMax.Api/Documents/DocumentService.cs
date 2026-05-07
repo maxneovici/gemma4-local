@@ -4,6 +4,8 @@ using LLLMax.Api.Memory;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
+using LLLMax.Api.Storage;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 
 namespace LLLMax.Api.Documents;
@@ -12,17 +14,24 @@ public sealed class DocumentService(
     LocalDataPaths paths,
     ILocalMemoryStore memoryStore,
     IOllamaApi ollamaApi,
+    IDbContextFactory<LocalDbContext> dbFactory,
+    ILogger<DocumentService> logger,
     IOptions<LocalAiOptions> options) : IDocumentService
 {
+    private const string ImportMarker = "documents_file_metadata_imported";
     private static readonly HashSet<string> TextExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
         ".txt", ".md", ".json", ".csv", ".xml", ".html", ".css", ".js", ".ts", ".cs", ".sql", ".log"
     };
 
     private readonly LocalAiOptions _options = options.Value;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _imported;
 
     public async Task<DocumentUploadResponse> SaveUploadAsync(IFormFile file, CancellationToken cancellationToken)
     {
+        await EnsureImportedAsync(cancellationToken);
+
         if (file.Length == 0)
         {
             throw new ArgumentException("Uploaded file is empty.", nameof(file));
@@ -40,6 +49,28 @@ public sealed class DocumentService(
 
         await using var stream = File.Create(path);
         await file.CopyToAsync(stream, cancellationToken);
+
+        await _gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            db.Documents.Add(new DocumentEntity
+            {
+                Id = id,
+                FileName = safeName,
+                StoredFileName = storedName,
+                Path = path,
+                Bytes = file.Length,
+                ContentType = file.ContentType,
+                CreatedAt = DateTimeOffset.UtcNow
+            });
+            await db.SaveChangesAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
 
         return new DocumentUploadResponse(id, safeName, file.Length, path);
     }
@@ -175,11 +206,64 @@ public sealed class DocumentService(
 
     private async Task<(string File, string Base64)> LoadImageAsync(string documentId, CancellationToken cancellationToken)
     {
-        var file = Directory.EnumerateFiles(paths.DocumentDirectory, $"{documentId}_*").SingleOrDefault()
+        await EnsureImportedAsync(cancellationToken);
+        await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+        var document = await db.Documents.AsNoTracking().SingleOrDefaultAsync(document => document.Id == documentId, cancellationToken);
+        var file = document?.Path ?? Directory.EnumerateFiles(paths.DocumentDirectory, $"{documentId}_*").SingleOrDefault()
             ?? throw new InvalidOperationException($"Document '{documentId}' does not exist.");
 
         var bytes = await File.ReadAllBytesAsync(file, cancellationToken);
         return (file, Convert.ToBase64String(bytes));
+    }
+
+    private async Task EnsureImportedAsync(CancellationToken cancellationToken) =>
+        await JsonImport.ImportOnceAsync(dbFactory, _gate, () => _imported, () => _imported = true, ImportMarker, ImportFileMetadataAsync, cancellationToken);
+
+    private async Task ImportFileMetadataAsync(LocalDbContext db, CancellationToken cancellationToken)
+    {
+        if (!Directory.Exists(paths.DocumentDirectory))
+        {
+            return;
+        }
+
+        foreach (var file in Directory.EnumerateFiles(paths.DocumentDirectory))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var storedName = Path.GetFileName(file);
+            var separatorIndex = storedName.IndexOf('_', StringComparison.Ordinal);
+
+            if (separatorIndex <= 0)
+            {
+                continue;
+            }
+
+            var id = storedName[..separatorIndex];
+
+            try
+            {
+                if (await db.Documents.AnyAsync(document => document.Id == id, cancellationToken))
+                {
+                    continue;
+                }
+
+                var info = new FileInfo(file);
+                db.Documents.Add(new DocumentEntity
+                {
+                    Id = id,
+                    FileName = storedName[(separatorIndex + 1)..],
+                    StoredFileName = storedName,
+                    Path = file,
+                    Bytes = info.Length,
+                    ContentType = null,
+                    CreatedAt = info.CreationTimeUtc == DateTime.MinValue ? DateTimeOffset.UtcNow : new DateTimeOffset(info.CreationTimeUtc)
+                });
+                await db.SaveChangesAsync(cancellationToken);
+            }
+            catch (Exception exception) when (exception is IOException or InvalidOperationException)
+            {
+                logger.LogWarning(exception, "Could not import document metadata for file {File}", file);
+            }
+        }
     }
 
     private string ResolveVisionModel(string? model) =>

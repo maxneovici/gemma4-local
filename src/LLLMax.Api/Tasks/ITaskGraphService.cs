@@ -20,5 +20,7 @@ public interface ITaskGraphService
 
     Task<TaskGraph> RecordRunCompletedAsync(string sessionId, string answer, IReadOnlyList<ReasoningStep> reasoningSteps, CancellationToken cancellationToken);
 
+    TaskGraph SnapshotCurrentTurn(TaskGraph graph);
+
     Task<TaskGraph> RecordRunBlockedAsync(string sessionId, string blocker, CancellationToken cancellationToken);
 }

@@ -44,6 +44,11 @@
         </div>
       </div>
       <button id="newSession" class="primary">New session</button>
+      <details class="panel-section">
+        <summary>Session Memory</summary>
+        <button id="consolidateSession" type="button">Consolidate session</button>
+        <div id="consolidationJobs" class="job-list"></div>
+      </details>
       <details class="panel-section" open>
         <summary>Previous Sessions</summary>
         <button id="deleteSessions" class="danger-button" type="button">Delete all sessions</button>
@@ -97,8 +102,6 @@
         <summary>Memory</summary>
         <div id="memoryStats" class="memory-stats"></div>
         <button id="openQdrantBrowser" type="button">Open Qdrant browser</button>
-        <button id="consolidateSession" type="button">Consolidate session</button>
-        <div id="consolidationJobs" class="job-list"></div>
         <div class="memory-search">
           <select id="memoryCollectionSelect"></select>
           <input id="memoryQuery" placeholder="search local memory">
@@ -111,13 +114,20 @@
         <div id="backgroundJobs" class="background-job-list"></div>
         <div id="artifactViewer" class="artifact-viewer" hidden></div>
       </details>
-      <details class="panel-section" open>
-        <summary>Metrics</summary>
-        <div id="metrics" class="metrics"></div>
-      </details>
-      <details class="panel-section" open>
-        <summary>Selected Message Graph</summary>
-        <div id="taskGraph" class="task-graph"></div>
+      <details class="panel-section response-details">
+        <summary>Response Details</summary>
+        <section class="response-detail-section">
+          <h3>Metrics</h3>
+          <div id="metrics" class="metrics"></div>
+        </section>
+        <section class="response-detail-section">
+          <h3>Selected Message Graph</h3>
+          <div id="taskGraph" class="task-graph"></div>
+        </section>
+        <section class="response-detail-section">
+          <h3>Toolchain & Reasoning</h3>
+          <div id="steps" class="steps"></div>
+        </section>
       </details>
       <details class="panel-section">
         <summary>MCP Bridge</summary>
@@ -126,10 +136,6 @@
         <input id="mcpTool" placeholder="tool name">
         <button id="registerMcp" type="button">Register MCP tool</button>
         <div id="mcpServers" class="mcp-list"></div>
-      </details>
-      <details class="panel-section" open>
-        <summary>Selected Message Reasoning</summary>
-        <div id="steps" class="steps"></div>
       </details>
       <details class="panel-section">
         <summary>Documents</summary>

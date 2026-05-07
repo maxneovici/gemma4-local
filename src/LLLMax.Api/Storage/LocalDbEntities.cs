@@ -84,6 +84,45 @@ public sealed class BackgroundJobEntity
     public DateTimeOffset? CompletedAt { get; set; }
 }
 
+[Index(nameof(JobId))]
+[Index(nameof(CreatedAt))]
+public sealed class BackgroundJobArtifactEntity
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string JobId { get; set; } = string.Empty;
+
+    public string Kind { get; set; } = string.Empty;
+
+    public string Title { get; set; } = string.Empty;
+
+    public string ContentType { get; set; } = string.Empty;
+
+    public string FileName { get; set; } = string.Empty;
+
+    public long Bytes { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
+[Index(nameof(CreatedAt))]
+public sealed class DocumentEntity
+{
+    public string Id { get; set; } = string.Empty;
+
+    public string FileName { get; set; } = string.Empty;
+
+    public string StoredFileName { get; set; } = string.Empty;
+
+    public string Path { get; set; } = string.Empty;
+
+    public long Bytes { get; set; }
+
+    public string? ContentType { get; set; }
+
+    public DateTimeOffset CreatedAt { get; set; }
+}
+
 [Index(nameof(UpdatedAt))]
 public sealed class ApprovalEntity
 {

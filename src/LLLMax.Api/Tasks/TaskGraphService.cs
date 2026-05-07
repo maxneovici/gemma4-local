@@ -165,6 +165,28 @@ public sealed class TaskGraphService(ITaskGraphStore store) : ITaskGraphService
         }, cancellationToken);
     }
 
+    public TaskGraph SnapshotCurrentTurn(TaskGraph graph)
+    {
+        var runStartedIndex = graph.Events.ToList().FindLastIndex(item => item.Kind.Equals("run_started", StringComparison.OrdinalIgnoreCase));
+        var events = runStartedIndex >= 0 ? graph.Events.Skip(runStartedIndex).ToList() : graph.Events.ToList();
+        var eventIds = events.Select(item => item.Id).ToHashSet(StringComparer.Ordinal);
+        var turnNode = graph.Nodes.LastOrDefault(node => node.Kind.Equals("turn", StringComparison.OrdinalIgnoreCase));
+        var turnStartedAt = turnNode?.StartedAt ?? events.FirstOrDefault()?.CreatedAt ?? graph.CreatedAt;
+        var nodes = graph.Nodes
+            .Where(node => node.StartedAt is null || node.StartedAt >= turnStartedAt)
+            .ToList();
+        var artifacts = graph.Artifacts
+            .Where(artifact => artifact.CreatedAt >= turnStartedAt || eventIds.Contains(artifact.Id))
+            .ToList();
+
+        return graph with
+        {
+            Nodes = nodes,
+            Artifacts = artifacts,
+            Events = events
+        };
+    }
+
     public async Task<TaskGraph> RecordRunBlockedAsync(string sessionId, string blocker, CancellationToken cancellationToken)
     {
         var graph = await EnsureForSessionAsync(sessionId, "Session task", cancellationToken);

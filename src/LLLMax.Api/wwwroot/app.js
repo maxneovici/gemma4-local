@@ -72,11 +72,21 @@ function setWorking(isWorking, label = '') {
 
 function renderMessages(messages) {
   clearInlineProgress();
+  const previousTraceId = state.selectedTraceId;
   state.messageTraces = new Map();
   $('messages').innerHTML = messages.filter(message => message.role !== 'progress').map((message, index) => renderMessage(message, index)).join('');
   document.querySelectorAll('[data-trace-id]').forEach(element => {
     element.addEventListener('click', () => selectMessageTrace(element.dataset.traceId));
   });
+
+  if (previousTraceId && state.messageTraces.has(previousTraceId)) {
+    selectMessageTrace(previousTraceId);
+  } else {
+    state.selectedTraceId = null;
+    renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
+    renderSteps([]);
+  }
+
   $('messages').scrollTop = $('messages').scrollHeight;
 }
 
@@ -88,8 +98,13 @@ function renderMessage(message, index) {
     return `<div class="message user" data-raw="${escapeHtml(raw)}">${escapeHtml(raw)}</div>`;
   }
 
-  const traceId = message.traceId ?? `message-${index}`;
   const hasTrace = Boolean(message.reasoningSteps?.length || message.taskGraph);
+
+  if (!hasTrace) {
+    return `<div class="message assistant" data-raw="${escapeHtml(raw)}"><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
+  }
+
+  const traceId = message.traceId ?? `message-${index}`;
   state.messageTraces.set(traceId, {
     message,
     graph: message.taskGraph ?? null,
@@ -101,12 +116,24 @@ function renderMessage(message, index) {
 
 function renderRuntime(health) {
   const highModel = state.models.find(model => model.name === 'gemma4:31b');
-  $('runtime').innerHTML = [
-    ['ollama', health?.isHealthy ? 'healthy' : 'unknown'],
-    ['models', state.models.length],
-    ['31b', highModel ? `${highModel.sizeGb} GB` : 'missing'],
-    ['session', state.sessionId ? 'active' : 'none']
-  ].map(([label, value]) => `<div class="runtime-pill"><span>${escapeHtml(label)}</span><strong>${escapeHtml(String(value))}</strong></div>`).join('');
+  $('runtime').innerHTML = `
+    <div class="runtime-pill ${health?.isHealthy ? 'healthy' : 'unknown'}"><span>ollama</span><strong>${health?.isHealthy ? 'healthy' : 'unknown'}</strong></div>
+    <button id="runtimeModels" class="runtime-pill runtime-models" type="button"><span>models</span><strong>${escapeHtml(String(state.models.length))}</strong></button>
+    <div class="runtime-pill"><span>31b</span><strong>${escapeHtml(highModel ? `${highModel.sizeGb} GB` : 'missing')}</strong></div>
+    <div class="runtime-pill ${state.sessionId ? 'healthy' : ''}"><span>session</span><strong>${state.sessionId ? 'active' : 'none'}</strong></div>
+    <div id="modelDropdown" class="model-dropdown" hidden>
+      ${state.models.map(model => `<button type="button" data-select-model="${escapeHtml(model.name)}"><strong>${escapeHtml(model.name)}</strong><span>${escapeHtml(model.sizeGb)} GB</span></button>`).join('') || '<p class="muted">No local models found.</p>'}
+    </div>
+  `;
+  $('runtimeModels').addEventListener('click', () => {
+    $('modelDropdown').hidden = !$('modelDropdown').hidden;
+  });
+  document.querySelectorAll('[data-select-model]').forEach(button => {
+    button.addEventListener('click', () => {
+      $('modelSelect').value = button.dataset.selectModel;
+      $('modelDropdown').hidden = true;
+    });
+  });
 }
 
 function renderMetrics(metrics) {
@@ -131,8 +158,12 @@ function renderMetrics(metrics) {
 
 function renderSteps(steps) {
   $('steps').innerHTML = steps?.length
-    ? steps.map(step => `<div class="step"><strong>${escapeHtml(step.kind)}</strong>\n${escapeHtml(step.content)}</div>`).join('')
+    ? steps.map(step => `<div class="step ${isToolStep(step) ? 'tool-step' : ''}"><strong>${escapeHtml(step.kind)}</strong>\n${escapeHtml(step.content)}</div>`).join('')
     : '<p class="muted">Select an assistant message to inspect its reasoning.</p>';
+}
+
+function isToolStep(step) {
+  return String(step?.kind ?? '').includes('tool') || String(step?.content ?? '').includes('<tool_call|>');
 }
 
 function selectMessageTrace(traceId) {
@@ -221,7 +252,7 @@ async function loadSessions() {
           <button type="button" data-session="${session.id}">
             ${escapeHtml(session.title)}<br><small>${escapeHtml(formatSessionDate(session.updatedAt))} · ${session.messageCount} messages</small>
           </button>
-          <button class="session-delete" data-delete-session="${session.id}" type="button" title="Delete session">Delete</button>
+          <button class="session-delete" data-delete-session="${session.id}" type="button" title="Delete session" aria-label="Delete session">x</button>
         </div>
       `).join('')}
     </section>
@@ -716,7 +747,7 @@ async function sendMessage(event) {
     if (assistantTrace) {
       selectMessageTrace(assistantTrace[0]);
     }
-    await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
     $('sendButton').disabled = false;

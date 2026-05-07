@@ -12,6 +12,10 @@ public sealed class LocalDbContext(DbContextOptions<LocalDbContext> options) : D
 
     public DbSet<BackgroundJobEntity> BackgroundJobs => Set<BackgroundJobEntity>();
 
+    public DbSet<BackgroundJobArtifactEntity> BackgroundJobArtifacts => Set<BackgroundJobArtifactEntity>();
+
+    public DbSet<DocumentEntity> Documents => Set<DocumentEntity>();
+
     public DbSet<ApprovalEntity> Approvals => Set<ApprovalEntity>();
 
     public DbSet<TaskGraphEntity> TaskGraphs => Set<TaskGraphEntity>();
@@ -60,6 +64,26 @@ public sealed class LocalDbContext(DbContextOptions<LocalDbContext> options) : D
             entity.Property(job => job.Kind).IsRequired();
             entity.Property(job => job.Status).IsRequired();
             entity.Property(job => job.PayloadJson).IsRequired();
+        });
+
+        modelBuilder.Entity<BackgroundJobArtifactEntity>(entity =>
+        {
+            entity.ToTable("background_job_artifacts");
+            entity.HasKey(artifact => artifact.Id);
+            entity.Property(artifact => artifact.JobId).IsRequired();
+            entity.Property(artifact => artifact.Kind).IsRequired();
+            entity.Property(artifact => artifact.Title).IsRequired();
+            entity.Property(artifact => artifact.ContentType).IsRequired();
+            entity.Property(artifact => artifact.FileName).IsRequired();
+        });
+
+        modelBuilder.Entity<DocumentEntity>(entity =>
+        {
+            entity.ToTable("documents");
+            entity.HasKey(document => document.Id);
+            entity.Property(document => document.FileName).IsRequired();
+            entity.Property(document => document.StoredFileName).IsRequired();
+            entity.Property(document => document.Path).IsRequired();
         });
 
         modelBuilder.Entity<ApprovalEntity>(entity =>
