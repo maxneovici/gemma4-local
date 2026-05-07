@@ -1,4 +1,3 @@
-using System.Text.Json;
 using LLLMax.Api.Models;
 using LLLMax.Api.Services;
 using LLLMax.Api.Sessions;
@@ -11,10 +10,8 @@ public sealed class MemoryConsolidationService(
     ITaskGraphService taskGraphs,
     ILocalChatClient chatClient,
     ILocalMemoryStore memoryStore,
-    LocalDataPaths paths) : IMemoryConsolidationService
+    IMemoryConsolidationJobStore jobStore) : IMemoryConsolidationService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web) { WriteIndented = true };
-
     public async Task<MemoryConsolidationResponse> ConsolidateSessionAsync(MemoryConsolidationRequest request, CancellationToken cancellationToken)
     {
         var now = DateTimeOffset.UtcNow;
@@ -91,23 +88,7 @@ public sealed class MemoryConsolidationService(
     }
 
     public async Task<IReadOnlyList<MemoryConsolidationJob>> ListJobsAsync(CancellationToken cancellationToken)
-    {
-        var jobs = new List<MemoryConsolidationJob>();
-
-        foreach (var file in Directory.EnumerateFiles(paths.ConsolidationJobsDirectory, "*.json"))
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            await using var stream = File.OpenRead(file);
-            var job = await JsonSerializer.DeserializeAsync<MemoryConsolidationJob>(stream, JsonOptions, cancellationToken);
-
-            if (job is not null)
-            {
-                jobs.Add(job);
-            }
-        }
-
-        return jobs.OrderByDescending(job => job.UpdatedAt).ToList();
-    }
+        => await jobStore.ListAsync(cancellationToken);
 
     private async Task<string> SummarizeForMemoryAsync(AssistantSession session, TaskGraph? graph, CancellationToken cancellationToken)
     {
@@ -129,8 +110,5 @@ public sealed class MemoryConsolidationService(
         $"Goal: {graph.Goal}\nStatus: {graph.Status}\nConfidence: {graph.Confidence:0.00}\nActive node: {graph.ActiveNodeId ?? "none"}\nNodes:\n{string.Join("\n", graph.Nodes.Select(node => $"- {node.Status}: {node.Title}; confidence={node.Confidence:0.00}; blocker={node.Blocker ?? "none"}"))}\nArtifacts:\n{string.Join("\n", graph.Artifacts.Select(artifact => $"- {artifact.Kind}: {artifact.Title}"))}";
 
     private async Task SaveJobAsync(MemoryConsolidationJob job, CancellationToken cancellationToken)
-    {
-        await using var stream = File.Create(Path.Combine(paths.ConsolidationJobsDirectory, $"{job.Id}.json"));
-        await JsonSerializer.SerializeAsync(stream, job, JsonOptions, cancellationToken);
-    }
+        => await jobStore.SaveAsync(job, cancellationToken);
 }

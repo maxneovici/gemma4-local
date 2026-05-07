@@ -10,8 +10,10 @@ using LLLMax.Api.Mcp;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Services;
 using LLLMax.Api.Sessions;
+using LLLMax.Api.Storage;
 using LLLMax.Api.Tasks;
 using LLLMax.Api.Tools;
+using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -60,9 +62,14 @@ builder.Services.AddHttpClient("qdrant", (serviceProvider, client) =>
 
 builder.Services.AddSingleton<LocalDataPaths>();
 builder.Services.AddSingleton<LocalEndpointGuard>();
-builder.Services.AddSingleton<IApprovalStore, FileApprovalStore>();
+builder.Services.AddDbContextFactory<LocalDbContext>((serviceProvider, options) =>
+{
+    var paths = serviceProvider.GetRequiredService<LocalDataPaths>();
+    options.UseSqlite($"Data Source={paths.SqliteDatabasePath}");
+});
+builder.Services.AddSingleton<IApprovalStore, EfApprovalStore>();
 builder.Services.AddSingleton<IApprovalService, ApprovalService>();
-builder.Services.AddSingleton<IMcpRegistry, FileMcpRegistry>();
+builder.Services.AddSingleton<IMcpRegistry, EfMcpRegistry>();
 builder.Services.AddSingleton<IMcpBridge, McpBridge>();
 builder.Services.AddSingleton<IOllamaApi, OllamaApi>();
 builder.Services.AddSingleton<ILocalModelSetupService, LocalModelSetupService>();
@@ -97,24 +104,26 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
     };
 });
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
-builder.Services.AddSingleton<IApiIntegrationRegistry, ApiIntegrationRegistry>();
-builder.Services.AddSingleton<IAssistantSessionStore, FileAssistantSessionStore>();
+builder.Services.AddSingleton<IApiIntegrationRegistry, EfApiIntegrationRegistry>();
+builder.Services.AddSingleton<IAssistantSessionStore, EfAssistantSessionStore>();
 builder.Services.AddSingleton<IBackgroundJobQueue, ChannelBackgroundJobQueue>();
-builder.Services.AddSingleton<IBackgroundJobStore, FileBackgroundJobStore>();
+builder.Services.AddSingleton<IBackgroundJobStore, EfBackgroundJobStore>();
 builder.Services.AddSingleton<IBackgroundJobArtifactStore, FileBackgroundJobArtifactStore>();
 builder.Services.AddSingleton<BackgroundJobService>();
 builder.Services.AddSingleton<IBackgroundJobService>(serviceProvider => serviceProvider.GetRequiredService<BackgroundJobService>());
 builder.Services.AddSingleton<IBackgroundJobHandler, DocumentVectorizationJobHandler>();
 builder.Services.AddSingleton<IBackgroundJobHandler, MemoryReportJobHandler>();
 builder.Services.AddSingleton<IBackgroundJobHandler, WebResearchJobHandler>();
-builder.Services.AddSingleton<ITaskGraphStore, FileTaskGraphStore>();
+builder.Services.AddSingleton<ITaskGraphStore, EfTaskGraphStore>();
 builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
+builder.Services.AddSingleton<IMemoryConsolidationJobStore, EfMemoryConsolidationJobStore>();
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
 builder.Services.AddSingleton<IToolUsePlanner, ToolUsePlanner>();
 builder.Services.AddSingleton<IRoutingEvaluationService, RoutingEvaluationService>();
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();
 builder.Services.AddHostedService<LocalModelSetupHostedService>();
+builder.Services.AddHostedService<LocalDbHostedService>();
 builder.Services.AddHostedService<BackgroundJobWorker>();
 
 var app = builder.Build();

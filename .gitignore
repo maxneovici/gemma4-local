@@ -8,9 +8,13 @@ obj/
 TestResults/
 qdrant_storage/
 data/*.log
+data/*.db
+data/*.db-*
 data/**/*.json
 data/documents/*
 src/**/data/**/*.json
+src/**/data/**/*.db
+src/**/data/**/*.db-*
 src/**/data/documents/*
 src/**/data/background-job-artifacts/*
 data/background-job-artifacts/*
