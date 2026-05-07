@@ -7,6 +7,8 @@ public static class BackgroundJobKinds
     public const string DocumentVectorizeFolder = "document_vectorize_folder";
 
     public const string MemoryReport = "memory_report";
+
+    public const string WebResearch = "web_research";
 }
 
 public static class BackgroundJobStatuses

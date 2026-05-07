@@ -1,4 +1,6 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
+using LLLMax.Api.Agents;
 using LLLMax.Api.Options;
 using Microsoft.Extensions.Options;
 
@@ -24,23 +26,38 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             throw new ArgumentException("Tool argument 'url' must be an absolute HTTP or HTTPS URL.");
         }
 
+        if (invocation.OnEvent is not null)
+        {
+            await invocation.OnEvent(new AgentRuntimeEvent(
+                Kind: "tool_progress",
+                Content: $"Browsing {uri}",
+                Tool: Name,
+                Arguments: new Dictionary<string, string> { ["url"] = uri.ToString() }), cancellationToken);
+        }
+
         var text = await httpClientFactory.CreateClient("web-browse").GetStringAsync(uri, cancellationToken);
         text = StripHtml(text);
 
-        return new LocalToolResult(text.Length <= _options.WebBrowsing.MaxResponseCharacters
+        var content = text.Length <= _options.WebBrowsing.MaxResponseCharacters
             ? text
-            : text[.._options.WebBrowsing.MaxResponseCharacters]);
+            : text[.._options.WebBrowsing.MaxResponseCharacters];
+
+        return new LocalToolResult($"URL: {uri}\n\n{content}");
     }
 
     private static string StripHtml(string text) =>
-        text.Replace("<script", "\n<script", StringComparison.OrdinalIgnoreCase)
-            .Replace("<style", "\n<style", StringComparison.OrdinalIgnoreCase)
-            .Split('\n')
-            .Where(line => !line.TrimStart().StartsWith("<script", StringComparison.OrdinalIgnoreCase) && !line.TrimStart().StartsWith("<style", StringComparison.OrdinalIgnoreCase))
-            .Aggregate(string.Empty, (current, line) => current + "\n" + System.Text.RegularExpressions.Regex.Replace(line, "<[^>]+>", " "))
+        Regex.Replace(text, "<script[\\s\\S]*?</script>", " ", RegexOptions.IgnoreCase)
             .Replace("&nbsp;", " ", StringComparison.OrdinalIgnoreCase)
             .Replace("&amp;", "&", StringComparison.OrdinalIgnoreCase)
+            .Pipe(value => Regex.Replace(value, "<style[\\s\\S]*?</style>", " ", RegexOptions.IgnoreCase))
+            .Pipe(value => Regex.Replace(value, "<[^>]+>", " "))
+            .Pipe(value => Regex.Replace(value, "\\s+", " "))
             .Trim();
 }
 
 public sealed record WebBrowseArguments([property: Required] string Url);
+
+file static class WebBrowseStringPipeExtensions
+{
+    public static string Pipe(this string value, Func<string, string> transform) => transform(value);
+}

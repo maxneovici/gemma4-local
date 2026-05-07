@@ -106,6 +106,7 @@ builder.Services.AddSingleton<BackgroundJobService>();
 builder.Services.AddSingleton<IBackgroundJobService>(serviceProvider => serviceProvider.GetRequiredService<BackgroundJobService>());
 builder.Services.AddSingleton<IBackgroundJobHandler, DocumentVectorizationJobHandler>();
 builder.Services.AddSingleton<IBackgroundJobHandler, MemoryReportJobHandler>();
+builder.Services.AddSingleton<IBackgroundJobHandler, WebResearchJobHandler>();
 builder.Services.AddSingleton<ITaskGraphStore, FileTaskGraphStore>();
 builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
