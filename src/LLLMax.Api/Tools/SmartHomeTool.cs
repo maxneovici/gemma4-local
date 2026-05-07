@@ -266,7 +266,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
     private async Task SendSamsungTvKeyAsync(LocalSamsungTvOptions tv, string key, CancellationToken cancellationToken)
     {
         var encodedName = Convert.ToBase64String(Encoding.UTF8.GetBytes(tv.RemoteName));
-        var uriBuilder = new UriBuilder("ws", tv.Host, tv.RemotePort, "/api/v2/channels/samsung.remote.control")
+        var uriBuilder = new UriBuilder(tv.RemotePort == 8002 ? "wss" : "ws", tv.Host, tv.RemotePort, "/api/v2/channels/samsung.remote.control")
         {
             Query = string.IsNullOrWhiteSpace(tv.Token)
                 ? $"name={Uri.EscapeDataString(encodedName)}"
@@ -274,6 +274,7 @@ public sealed class SmartHomeTool(IHttpClientFactory httpClientFactory, IOptions
         };
 
         using var socket = new ClientWebSocket();
+        socket.Options.RemoteCertificateValidationCallback = (_, _, _, _) => true;
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(TimeSpan.FromSeconds(_options.SmartHome.RequestTimeoutSeconds));
         await socket.ConnectAsync(uriBuilder.Uri, timeout.Token);
