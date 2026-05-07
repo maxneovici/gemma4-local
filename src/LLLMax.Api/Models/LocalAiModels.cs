@@ -1,5 +1,7 @@
 using System.Text.Json.Serialization;
 using System.Text.Json.Nodes;
+using LLLMax.Api.Agents;
+using LLLMax.Api.Tasks;
 
 namespace LLLMax.Api.Models;
 
@@ -13,7 +15,12 @@ public sealed record LocalChatRequest(
     double? TopP = null,
     int? TopK = null);
 
-public sealed record LocalChatMessage(string Role, string Content);
+public sealed record LocalChatMessage(
+    string Role,
+    string Content,
+    string? TraceId = null,
+    IReadOnlyList<ReasoningStep>? ReasoningSteps = null,
+    TaskGraph? TaskGraph = null);
 
 public sealed record LocalChatResponse(
     string Model,

@@ -65,7 +65,10 @@ public sealed class AssistantOrchestrator(
                 }
             }), cancellationToken);
 
-        var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response)]).ToList();
+        var completedGraph = await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, agentResponse.ReasoningSteps ?? [], cancellationToken);
+        var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
+        var assistantMessage = new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, completedGraph);
+        var nextMessages = messages.Concat([assistantMessage]).ToList();
         await sessions.SaveAsync(session with
         {
             Agent = request.Agent ?? session.Agent,
@@ -73,14 +76,13 @@ public sealed class AssistantOrchestrator(
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
-        await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, agentResponse.ReasoningSteps ?? [], cancellationToken);
 
         return new SessionChatResponse(
             SessionId: session.Id,
             Response: agentResponse.Response,
             Messages: nextMessages,
             Metrics: agentResponse.Metrics,
-            ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
+            ReasoningSteps: reasoningSteps,
             Summarized: summarized,
             Route: toolDecision);
     }
@@ -163,7 +165,9 @@ public sealed class AssistantOrchestrator(
                         await channel.Writer.WriteAsync(new SessionChatStreamEvent("progress", runtimeEvent.Content, Payload: new { runtimeEvent, graph }), token);
                     }), cancellationToken);
 
-                var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response)]).ToList();
+                var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
+                var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
+                var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, graph)]).ToList();
                 await sessions.SaveAsync(session with
                 {
                     Agent = request.Agent ?? session.Agent,
@@ -171,7 +175,6 @@ public sealed class AssistantOrchestrator(
                     UpdatedAt = DateTimeOffset.UtcNow,
                     Messages = nextMessages
                 }, cancellationToken);
-                var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
 
                 if (graph is not null)
                 {
@@ -183,7 +186,7 @@ public sealed class AssistantOrchestrator(
                     Response: agentResponse.Response,
                     Messages: nextMessages,
                     Metrics: agentResponse.Metrics,
-                    ReasoningSteps: WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []),
+                    ReasoningSteps: reasoningSteps,
                     Summarized: false,
                     Route: toolDecision);
             }
@@ -237,7 +240,9 @@ public sealed class AssistantOrchestrator(
         }
 
         var response = responseBuilder.ToString();
-        var nextMessages = messages.Concat([new LocalChatMessage("assistant", response)]).ToList();
+        var reasoningSteps = WithToolDecision(toolDecision, [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]);
+        var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, response, reasoningSteps, cancellationToken);
+        var nextMessages = messages.Concat([new LocalChatMessage("assistant", response, Guid.NewGuid().ToString("n"), reasoningSteps, graph)]).ToList();
         var metrics = new AgentRunMetrics(
             Model: finalChunk?.Model ?? route.Model,
             ReasoningEffort: route.ReasoningEffort,
@@ -251,7 +256,7 @@ public sealed class AssistantOrchestrator(
             Response: response,
             Messages: nextMessages,
             Metrics: metrics,
-            ReasoningSteps: WithToolDecision(toolDecision, [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]),
+            ReasoningSteps: reasoningSteps,
             Summarized: summarized,
             Route: toolDecision);
 
@@ -262,7 +267,6 @@ public sealed class AssistantOrchestrator(
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
-        var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, response, finalResponse.ReasoningSteps, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
         yield return new SessionChatStreamEvent("final", Result: finalResponse);
     }
@@ -316,7 +320,8 @@ public sealed class AssistantOrchestrator(
             yield break;
         }
 
-        var rewrittenMessages = session.Messages.Take(session.Messages.Count - 1).Concat([new LocalChatMessage("assistant", finalText)]).ToList();
+        var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, finalText, toolResponse.ReasoningSteps, cancellationToken);
+        var rewrittenMessages = session.Messages.Take(session.Messages.Count - 1).Concat([new LocalChatMessage("assistant", finalText, Guid.NewGuid().ToString("n"), toolResponse.ReasoningSteps, graph)]).ToList();
         await sessions.SaveAsync(session with { Messages = rewrittenMessages, UpdatedAt = DateTimeOffset.UtcNow }, cancellationToken);
         var metrics = new AgentRunMetrics(
             Model: finalChunk?.Model ?? route.Model,
@@ -327,7 +332,6 @@ public sealed class AssistantOrchestrator(
             TokensPerSecond: finalChunk?.TokensPerSecond ?? toolResponse.Metrics?.TokensPerSecond,
             EstimatedContextTokens: ContextEstimator.EstimateTokens(messages));
         var result = toolResponse with { Response = finalText, Messages = rewrittenMessages, Metrics = metrics };
-        var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, finalText, result.ReasoningSteps, cancellationToken);
 
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
         yield return new SessionChatStreamEvent("final", Result: result);

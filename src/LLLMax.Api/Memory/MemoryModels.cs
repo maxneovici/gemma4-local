@@ -72,3 +72,15 @@ public sealed record MemoryCollectionInspectResponse(
     int Count,
     string? NextCursor,
     IReadOnlyList<MemoryCollectionRecordPreview> Records);
+
+public sealed record MemoryCollectionGroupResponse(
+    string Collection,
+    int SampledRecords,
+    IReadOnlyList<MemoryTenantGroup> Tenants);
+
+public sealed record MemoryTenantGroup(
+    string Tenant,
+    int Count,
+    IReadOnlyList<MemoryCategoryGroup> Categories);
+
+public sealed record MemoryCategoryGroup(string Category, int Count);

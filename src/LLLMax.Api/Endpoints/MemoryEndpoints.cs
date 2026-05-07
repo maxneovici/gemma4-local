@@ -47,6 +47,25 @@ public static class MemoryEndpoints
         group.MapPost("/collections/{collection}/inspect", async (string collection, MemoryCollectionInspectRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.InspectCollectionAsync(collection, request, cancellationToken)));
 
+        group.MapGet("/collections/{collection}/groups", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            var inspected = await memoryStore.InspectCollectionAsync(collection, new MemoryCollectionInspectRequest(Limit: 100), cancellationToken);
+            var tenants = inspected.Records
+                .GroupBy(record => GetMetadata(record.Metadata, "tenant") ?? "unscoped", StringComparer.OrdinalIgnoreCase)
+                .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(tenantGroup => new MemoryTenantGroup(
+                    Tenant: tenantGroup.Key,
+                    Count: tenantGroup.Count(),
+                    Categories: tenantGroup
+                        .GroupBy(record => GetMetadata(record.Metadata, "category") ?? "uncategorized", StringComparer.OrdinalIgnoreCase)
+                        .OrderBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
+                        .Select(categoryGroup => new MemoryCategoryGroup(categoryGroup.Key, categoryGroup.Count()))
+                        .ToList()))
+                .ToList();
+
+            return Results.Ok(new MemoryCollectionGroupResponse(inspected.Collection, inspected.Records.Count, tenants));
+        });
+
         group.MapDelete("/collections/{collection}", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.DeleteCollectionAsync(collection, cancellationToken)));
 
@@ -67,4 +86,7 @@ public static class MemoryEndpoints
 
         return app;
     }
+
+    private static string? GetMetadata(IReadOnlyDictionary<string, string> metadata, string key) =>
+        metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
 }

@@ -40,7 +40,7 @@ public sealed class FileAssistantSessionStore(LocalDataPaths paths, IOptions<Loc
             await using var stream = File.OpenRead(file);
             var session = await JsonSerializer.DeserializeAsync<AssistantSession>(stream, JsonOptions, cancellationToken);
 
-            if (session is not null)
+            if (session is { Messages.Count: > 0 })
             {
                 sessions.Add(new SessionListResponse(
                     session.Id,
@@ -102,6 +102,20 @@ public sealed class FileAssistantSessionStore(LocalDataPaths paths, IOptions<Loc
         {
             _gate.Release();
         }
+    }
+
+    public Task<bool> DeleteAsync(string id, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var file = GetPath(id);
+
+        if (!File.Exists(file))
+        {
+            return Task.FromResult(false);
+        }
+
+        File.Delete(file);
+        return Task.FromResult(true);
     }
 
     private async Task SaveUnsafeAsync(AssistantSession session, CancellationToken cancellationToken)

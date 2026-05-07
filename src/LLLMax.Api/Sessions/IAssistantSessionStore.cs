@@ -14,5 +14,7 @@ public interface IAssistantSessionStore
 
     Task AppendMessageAsync(string id, LocalChatMessage message, CancellationToken cancellationToken);
 
+    Task<bool> DeleteAsync(string id, CancellationToken cancellationToken);
+
     Task DeleteAllAsync(CancellationToken cancellationToken);
 }

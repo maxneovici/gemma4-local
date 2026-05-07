@@ -11,6 +11,12 @@ const state = {
   selectedCollection: null,
   collectionInspectCursor: null,
   collectionInspectFilter: {},
+  selectedTenant: null,
+  selectedCategory: null,
+  draftSession: null,
+  visibleSessionCount: 12,
+  messageTraces: new Map(),
+  selectedTraceId: null,
   consolidationJobs: [],
   approvals: [],
   mcpServers: []
@@ -66,11 +72,15 @@ function setWorking(isWorking, label = '') {
 
 function renderMessages(messages) {
   clearInlineProgress();
-  $('messages').innerHTML = messages.filter(message => message.role !== 'progress').map(renderMessage).join('');
+  state.messageTraces = new Map();
+  $('messages').innerHTML = messages.filter(message => message.role !== 'progress').map((message, index) => renderMessage(message, index)).join('');
+  document.querySelectorAll('[data-trace-id]').forEach(element => {
+    element.addEventListener('click', () => selectMessageTrace(element.dataset.traceId));
+  });
   $('messages').scrollTop = $('messages').scrollHeight;
 }
 
-function renderMessage(message) {
+function renderMessage(message, index) {
   const role = message.role === 'user' ? 'user' : 'assistant';
   const raw = message.content ?? '';
 
@@ -78,7 +88,15 @@ function renderMessage(message) {
     return `<div class="message user" data-raw="${escapeHtml(raw)}">${escapeHtml(raw)}</div>`;
   }
 
-  return `<div class="message assistant" data-raw="${escapeHtml(raw)}"><div class="markdown-body">${renderMarkdown(raw)}</div></div>`;
+  const traceId = message.traceId ?? `message-${index}`;
+  const hasTrace = Boolean(message.reasoningSteps?.length || message.taskGraph);
+  state.messageTraces.set(traceId, {
+    message,
+    graph: message.taskGraph ?? null,
+    reasoningSteps: message.reasoningSteps ?? []
+  });
+
+  return `<div class="message assistant ${hasTrace ? 'has-trace' : ''} ${traceId === state.selectedTraceId ? 'selected' : ''}" data-raw="${escapeHtml(raw)}" data-trace-id="${escapeHtml(traceId)}"><div class="markdown-body">${renderMarkdown(raw)}</div>${hasTrace ? '<span class="trace-hint">trace</span>' : ''}</div>`;
 }
 
 function renderRuntime(health) {
@@ -114,7 +132,18 @@ function renderMetrics(metrics) {
 function renderSteps(steps) {
   $('steps').innerHTML = steps?.length
     ? steps.map(step => `<div class="step"><strong>${escapeHtml(step.kind)}</strong>\n${escapeHtml(step.content)}</div>`).join('')
-    : '<p class="muted">Reasoning steps appear after a run.</p>';
+    : '<p class="muted">Select an assistant message to inspect its reasoning.</p>';
+}
+
+function selectMessageTrace(traceId) {
+  state.selectedTraceId = traceId;
+  document.querySelectorAll('[data-trace-id]').forEach(element => {
+    element.classList.toggle('selected', element.dataset.traceId === traceId);
+  });
+
+  const trace = state.messageTraces.get(traceId);
+  renderTaskGraph(trace?.graph ?? null, trace ? 'No task graph was recorded for this message.' : 'Select an assistant message to inspect its task graph.');
+  renderSteps(trace?.reasoningSteps ?? []);
 }
 
 async function loadModels() {
@@ -181,16 +210,60 @@ async function loadMcpServers() {
 }
 
 async function loadSessions() {
-  state.sessions = await api('/sessions');
-  $('sessions').innerHTML = state.sessions.map(session => `
-    <button type="button" class="${session.id === state.sessionId ? 'active' : ''}" data-session="${session.id}">
-      ${escapeHtml(session.title)}<br><small>${session.messageCount} messages</small>
-    </button>
-  `).join('');
+  state.sessions = (await api('/sessions')).filter(session => session.messageCount > 0);
+  const visible = state.sessions.slice(0, state.visibleSessionCount);
+  const groups = groupSessionsByDate(visible);
+  $('sessions').innerHTML = groups.map(group => `
+    <section class="session-group">
+      <strong>${escapeHtml(group.label)}</strong>
+      ${group.sessions.map(session => `
+        <div class="session-row ${session.id === state.sessionId ? 'active' : ''}">
+          <button type="button" data-session="${session.id}">
+            ${escapeHtml(session.title)}<br><small>${escapeHtml(formatSessionDate(session.updatedAt))} · ${session.messageCount} messages</small>
+          </button>
+          <button class="session-delete" data-delete-session="${session.id}" type="button" title="Delete session">Delete</button>
+        </div>
+      `).join('')}
+    </section>
+  `).join('') || '<p class="muted">No saved sessions yet.</p>';
+
+  if (state.sessions.length > visible.length) {
+    $('sessions').innerHTML += `<button id="showMoreSessions" type="button">Show ${escapeHtml(Math.min(12, state.sessions.length - visible.length))} more</button>`;
+  }
 
   document.querySelectorAll('[data-session]').forEach(button => {
     button.addEventListener('click', () => guarded(() => openSession(button.dataset.session), 'Opening session...'));
   });
+  document.querySelectorAll('[data-delete-session]').forEach(button => {
+    button.addEventListener('click', event => {
+      event.stopPropagation();
+      deleteSession(button.dataset.deleteSession);
+    });
+  });
+  $('showMoreSessions')?.addEventListener('click', () => {
+    state.visibleSessionCount += 12;
+    loadSessions();
+  });
+}
+
+function groupSessionsByDate(sessions) {
+  const today = new Date().toDateString();
+  const yesterday = new Date(Date.now() - 86400000).toDateString();
+  const groups = new Map();
+
+  for (const session of sessions) {
+    const date = new Date(session.updatedAt);
+    const key = date.toDateString() === today ? 'Today' : date.toDateString() === yesterday ? 'Yesterday' : date.toLocaleDateString();
+
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(session);
+  }
+
+  return [...groups.entries()].map(([label, groupSessions]) => ({ label, sessions: groupSessions }));
+}
+
+function formatSessionDate(value) {
+  return new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
 async function loadMemoryStats() {
@@ -209,32 +282,104 @@ async function loadMemoryCollections() {
   $('memoryCollectionSelect').innerHTML = state.memoryCollections.map(collection => `
     <option value="${escapeHtml(collection.name)}" ${collection.name === selected ? 'selected' : ''}>${escapeHtml(collection.name)}</option>
   `).join('') || '<option value="coordinator">coordinator</option>';
-  $('memoryCollections').innerHTML = state.memoryCollections.slice(0, 8).map(collection => `
-    <div class="collection-card">
-      <strong>${escapeHtml(collection.name)}</strong>
-      <span>${escapeHtml(collection.recordCount)} pts${collection.vectorSize ? ` · ${escapeHtml(collection.vectorSize)}d` : ''}${collection.distance ? ` · ${escapeHtml(collection.distance)}` : ''}</span>
-      <div class="button-row">
-        <button data-collection-detail="${escapeHtml(collection.name)}" type="button">Details</button>
-        <button data-inspect-collection="${escapeHtml(collection.name)}" type="button">Inspect</button>
-        <button data-delete-collection="${escapeHtml(collection.name)}" type="button">Delete</button>
-      </div>
-    </div>
-  `).join('') || '<p class="muted">No memory collections yet.</p>';
+  renderQdrantCollectionTable();
+}
+
+function renderQdrantCollectionTable() {
+  if (!$('qdrantCollectionTable')) return;
+
+  $('qdrantCollectionTable').innerHTML = state.memoryCollections.length ? `
+    <table class="collection-table">
+      <thead><tr><th>Name</th><th>Records</th><th>Vector</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+        ${state.memoryCollections.map(collection => `
+          <tr>
+            <td><strong>${escapeHtml(humanizeCollectionName(collection.name))}</strong><span>${escapeHtml(collection.name)}</span></td>
+            <td>${escapeHtml(collection.recordCount)}</td>
+            <td>${collection.vectorSize ? `${escapeHtml(collection.vectorSize)}d` : '-'}${collection.distance ? ` · ${escapeHtml(collection.distance)}` : ''}</td>
+            <td>${escapeHtml(collection.status ?? collection.provider ?? '-')}</td>
+            <td><div class="table-actions"><button data-collection-detail="${escapeHtml(collection.name)}" type="button">Details</button><button data-browse-collection="${escapeHtml(collection.name)}" type="button">Browse</button><button data-delete-collection="${escapeHtml(collection.name)}" type="button">Delete</button></div></td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  ` : '<p class="muted">No memory collections yet.</p>';
 
   document.querySelectorAll('[data-collection-detail]').forEach(button => {
     button.addEventListener('click', () => showCollectionDetail(button.dataset.collectionDetail));
   });
-  document.querySelectorAll('[data-inspect-collection]').forEach(button => {
-    button.addEventListener('click', () => inspectCollection(button.dataset.inspectCollection));
+  document.querySelectorAll('[data-browse-collection]').forEach(button => {
+    button.addEventListener('click', () => browseCollection(button.dataset.browseCollection));
   });
   document.querySelectorAll('[data-delete-collection]').forEach(button => {
     button.addEventListener('click', () => deleteCollection(button.dataset.deleteCollection));
   });
 }
 
+function humanizeCollectionName(name) {
+  return name
+    .replace(/[_-]+/g, ' ')
+    .replace(/\b\w/g, character => character.toUpperCase());
+}
+
 async function showCollectionDetail(name) {
   const detail = await api(`/memory/collections/${encodeURIComponent(name)}`);
-  $('memoryResults').textContent = JSON.stringify(detail, null, 2);
+  $('collectionInspector').innerHTML = `
+    <div class="inspector-head">
+      <div><strong>${escapeHtml(humanizeCollectionName(detail.name))}</strong><span>${escapeHtml(detail.name)}</span></div>
+    </div>
+    <div class="detail-grid">
+      <div><span>provider</span><strong>${escapeHtml(detail.provider)}</strong></div>
+      <div><span>records</span><strong>${escapeHtml(detail.recordCount)}</strong></div>
+      <div><span>status</span><strong>${escapeHtml(detail.status ?? '-')}</strong></div>
+      <div><span>vector</span><strong>${detail.vectorSize ? `${escapeHtml(detail.vectorSize)}d` : '-'}${detail.distance ? ` · ${escapeHtml(detail.distance)}` : ''}</strong></div>
+    </div>
+  `;
+}
+
+async function browseCollection(name) {
+  await guarded(async () => {
+    state.selectedCollection = name;
+    state.selectedTenant = null;
+    state.selectedCategory = null;
+    state.collectionInspectCursor = null;
+    state.collectionInspectFilter = {};
+    const groups = await api(`/memory/collections/${encodeURIComponent(name)}/groups`);
+    renderCollectionTree(groups);
+  }, `Browsing ${name}...`, { overlay: false });
+}
+
+function renderCollectionTree(groups) {
+  $('collectionInspector').innerHTML = `
+    <div class="inspector-head">
+      <div>
+        <strong>${escapeHtml(humanizeCollectionName(groups.collection))}</strong>
+        <span>${escapeHtml(groups.sampledRecords)} sampled records grouped by tenant and category</span>
+      </div>
+    </div>
+    <div class="collection-tree">
+      ${(groups.tenants ?? []).map(tenant => `
+        <details open>
+          <summary>${escapeHtml(tenant.tenant)} <span>${escapeHtml(tenant.count)} records</span></summary>
+          <div class="tree-children">
+            ${(tenant.categories ?? []).map(category => `
+              <button data-tree-filter="${escapeHtml(groups.collection)}|${escapeHtml(tenant.tenant)}|${escapeHtml(category.category)}" type="button">
+                ${escapeHtml(category.category)} <span>${escapeHtml(category.count)}</span>
+              </button>
+            `).join('')}
+          </div>
+        </details>
+      `).join('') || '<p class="muted">No tenant/category metadata found in the sampled records.</p>'}
+    </div>
+    <div id="collectionRecordPane" class="collection-record-pane"><p class="muted">Select a tenant/category to preview records.</p></div>
+  `;
+
+  document.querySelectorAll('[data-tree-filter]').forEach(button => {
+    button.addEventListener('click', () => {
+      const [collection, tenant, category] = button.dataset.treeFilter.split('|');
+      inspectCollection(collection, { tenant, category });
+    });
+  });
 }
 
 async function inspectCollection(name, options = {}) {
@@ -245,7 +390,12 @@ async function inspectCollection(name, options = {}) {
 
     state.selectedCollection = name;
     $('memoryCollectionSelect').value = name;
-    const filter = parseMetadataFilter($('collectionFilter')?.value ?? '');
+    state.selectedTenant = options.tenant ?? state.selectedTenant;
+    state.selectedCategory = options.category ?? state.selectedCategory;
+    const filter = {
+      ...(state.selectedTenant && state.selectedTenant !== 'unscoped' ? { tenant: state.selectedTenant } : {}),
+      ...(state.selectedCategory && state.selectedCategory !== 'uncategorized' ? { category: state.selectedCategory } : {})
+    };
     state.collectionInspectFilter = filter;
     const result = await api(`/memory/collections/${encodeURIComponent(name)}/inspect`, {
       method: 'POST',
@@ -258,19 +408,14 @@ async function inspectCollection(name, options = {}) {
 }
 
 function renderCollectionInspector(result, append = false) {
+  const target = $('collectionRecordPane') ?? $('collectionInspector');
   const existing = append ? $('collectionRecords')?.innerHTML ?? '' : '';
-  $('collectionInspector').hidden = false;
-  $('collectionInspector').innerHTML = `
-    <div class="inspector-head">
+  target.innerHTML = `
+    <div class="record-pane-head">
       <div>
-        <strong>${escapeHtml(result.collection)}</strong>
+        <strong>${escapeHtml(state.selectedTenant ?? 'All tenants')} / ${escapeHtml(state.selectedCategory ?? 'All categories')}</strong>
         <span>${escapeHtml(result.count)} matching records · vectors hidden</span>
       </div>
-      <button id="closeInspector" type="button">Close</button>
-    </div>
-    <div class="memory-inspector-controls">
-      <input id="collectionFilter" placeholder="metadata filter: tenant=personal category=contracts" value="${escapeHtml(formatMetadataFilter(state.collectionInspectFilter))}">
-      <button id="applyCollectionFilter" type="button">Filter</button>
     </div>
     <div id="collectionRecords" class="collection-records">
       ${existing}${renderCollectionRecords(result.records)}
@@ -278,13 +423,6 @@ function renderCollectionInspector(result, append = false) {
     ${result.nextCursor ? '<button id="loadMoreCollectionRecords" type="button">Load more</button>' : ''}
   `;
 
-  $('closeInspector').addEventListener('click', () => {
-    $('collectionInspector').hidden = true;
-  });
-  $('applyCollectionFilter').addEventListener('click', () => inspectCollection(result.collection));
-  $('collectionFilter').addEventListener('keydown', event => {
-    if (event.key === 'Enter') inspectCollection(result.collection);
-  });
   $('loadMoreCollectionRecords')?.addEventListener('click', () => inspectCollection(result.collection, { reset: false, append: true, cursor: result.nextCursor }));
 }
 
@@ -324,6 +462,20 @@ function formatMetadataFilter(filter) {
   return Object.entries(filter ?? {}).map(([key, value]) => `${key}=${value}`).join(' ');
 }
 
+async function openQdrantBrowser() {
+  $('qdrantModal').hidden = false;
+  await guarded(async () => {
+    await loadMemoryCollections();
+  }, 'Opening Qdrant browser...', { overlay: false });
+}
+
+function closeQdrantBrowser() {
+  $('qdrantModal').hidden = true;
+  $('collectionInspector').innerHTML = '';
+  state.selectedTenant = null;
+  state.selectedCategory = null;
+}
+
 async function deleteCollection(name) {
   if (!confirm(`Delete memory collection ${name}? This removes its vectors from the active store.`)) return;
   await guarded(async () => {
@@ -334,15 +486,16 @@ async function deleteCollection(name) {
 
 async function loadConsolidationJobs() {
   state.consolidationJobs = await api('/memory/consolidation/jobs');
-  $('consolidationJobs').innerHTML = state.consolidationJobs.slice(0, 3).map(job => `
+  const visibleJobs = state.consolidationJobs.filter(job => job.sessionId === state.sessionId).slice(0, 3);
+  $('consolidationJobs').innerHTML = visibleJobs.map(job => `
     <div class="job ${escapeHtml(job.status)}"><strong>${escapeHtml(job.status)}</strong><span>${escapeHtml(job.sessionId.slice(0, 8))} · ${escapeHtml(String(job.memoriesWritten))} memories</span></div>
-  `).join('') || '<p class="muted">No consolidation jobs yet.</p>';
+  `).join('') || '<p class="muted">No consolidation jobs for this session.</p>';
 }
 
 async function loadBackgroundJobs() {
   state.backgroundJobs = await api('/background-jobs');
   await refreshCurrentSessionIfJobsCompleted(state.backgroundJobs);
-  const recent = state.backgroundJobs.slice(0, 8);
+  const recent = state.backgroundJobs.filter(job => job.sessionId === state.sessionId).slice(0, 8);
   $('backgroundJobs').innerHTML = recent.map(job => {
     const total = job.progressTotal || 0;
     const current = job.progressCurrent || 0;
@@ -359,7 +512,7 @@ async function loadBackgroundJobs() {
         ${canCancel ? `<button data-cancel-job="${escapeHtml(job.id)}" type="button">Cancel</button>` : ''}
       </div>
     `;
-  }).join('') || '<p class="muted">No background jobs yet.</p>';
+  }).join('') || '<p class="muted">No background jobs for this session.</p>';
 
   document.querySelectorAll('[data-cancel-job]').forEach(button => {
     button.addEventListener('click', () => cancelBackgroundJob(button.dataset.cancelJob));
@@ -412,34 +565,25 @@ async function viewArtifact(value) {
 }
 
 async function loadTaskGraph() {
-  if (!state.sessionId) {
-    renderTaskGraph(null);
-    return;
-  }
-
-  const response = await fetch(`/task-graphs/sessions/${state.sessionId}`);
-  state.taskGraph = response.ok ? await response.json() : null;
-  renderTaskGraph(state.taskGraph);
+  renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
 }
 
-function renderTaskGraph(graph) {
+function renderTaskGraph(graph, emptyText = 'No task graph for this message.') {
   if (!graph) {
-    $('taskGraph').innerHTML = '<p class="muted">No task graph for this session yet.</p>';
+    $('taskGraph').innerHTML = `<p class="muted">${escapeHtml(emptyText)}</p>`;
     return;
   }
 
-  const active = graph.nodes?.find(node => node.id === graph.activeNodeId);
   const artifacts = graph.artifacts ?? [];
   const events = graph.events ?? [];
   $('taskGraph').innerHTML = `
-    <div class="graph-head"><strong>${escapeHtml(graph.status)}</strong><span>${escapeHtml(Math.round((graph.confidence ?? 0) * 100))}% confidence</span></div>
+    <div class="graph-head"><strong>${escapeHtml(graph.status)}</strong><span>${escapeHtml((graph.nodes ?? []).length)} nodes · ${escapeHtml(Math.round((graph.confidence ?? 0) * 100))}%</span></div>
     <p>${escapeHtml(graph.goal)}</p>
-    <div class="active-node">active: ${escapeHtml(active?.title ?? 'none')}</div>
     <div class="node-list">
       ${(graph.nodes ?? []).map(node => `
-        <div class="node ${escapeHtml(node.status)}">
+        <div class="node mini ${escapeHtml(node.status)}">
+          <span>${escapeHtml(node.kind ?? 'turn')} · ${escapeHtml(node.status)}</span>
           <strong>${escapeHtml(node.title)}</strong>
-          <span>${escapeHtml(node.kind ?? 'turn')} · ${escapeHtml(node.status)} · ${escapeHtml(Math.round((node.confidence ?? 0) * 100))}%</span>
           ${node.blocker ? `<em>${escapeHtml(node.blocker)}</em>` : ''}
         </div>
       `).join('')}
@@ -464,10 +608,23 @@ function renderTaskGraph(graph) {
 }
 
 async function newSession() {
-  const session = await api('/sessions', { method: 'POST', body: JSON.stringify({ title: 'LLLMax session', model: $('modelSelect').value || null }) });
-  state.sessionId = session.id;
-  $('sessionTitle').textContent = session.title;
-  renderMessages(session.messages ?? []);
+  const now = new Date().toISOString();
+  state.draftSession = {
+    id: `draft-${crypto.randomUUID()}`,
+    title: 'LLLMax session',
+    agent: 'coordinator',
+    model: $('modelSelect').value || null,
+    createdAt: now,
+    updatedAt: now,
+    messages: []
+  };
+  state.sessionId = null;
+  knownJobStates = new Map();
+  $('sessionTitle').textContent = state.draftSession.title;
+  renderMessages([]);
+  state.selectedTraceId = null;
+  renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
+  renderSteps([]);
   await Promise.all([loadSessions(), loadMemoryStats()]);
   await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
@@ -479,7 +636,8 @@ async function deleteAllSessions() {
     state.sessionId = null;
     $('sessionTitle').textContent = 'Ready';
     renderMessages([]);
-    renderTaskGraph(null);
+    renderTaskGraph(null, 'Select an assistant message to inspect its task graph.');
+    renderSteps([]);
     await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs()]);
     await newSession();
   }, 'Deleting sessions...');
@@ -487,12 +645,43 @@ async function deleteAllSessions() {
 
 async function openSession(id) {
   const session = await api(`/sessions/${id}`);
+  state.draftSession = null;
   state.sessionId = session.id;
+  knownJobStates = new Map();
   $('sessionTitle').textContent = session.title;
   $('modelSelect').value = session.model ?? '';
+  state.selectedTraceId = null;
   renderMessages(session.messages ?? []);
   await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
+}
+
+async function ensurePersistedSession() {
+  if (state.sessionId) return;
+  const session = await api('/sessions', {
+    method: 'POST',
+    body: JSON.stringify({
+      title: state.draftSession?.title ?? 'LLLMax session',
+      agent: state.draftSession?.agent ?? 'coordinator',
+      model: $('modelSelect').value || state.draftSession?.model || null
+    })
+  });
+  state.sessionId = session.id;
+  state.draftSession = null;
+}
+
+async function deleteSession(id) {
+  if (!confirm('Delete this session?')) return;
+  await guarded(async () => {
+    await api(`/sessions/${encodeURIComponent(id)}`, { method: 'DELETE' });
+
+    if (state.sessionId === id) {
+      await newSession();
+      return;
+    }
+
+    await loadSessions();
+  }, 'Deleting session...');
 }
 
 async function sendMessage(event) {
@@ -501,7 +690,7 @@ async function sendMessage(event) {
   if (!message) return;
 
   await guarded(async () => {
-    if (!state.sessionId) await newSession();
+    await ensurePersistedSession();
     $('prompt').value = '';
     $('sendButton').disabled = true;
     const existingMessages = documentMessages();
@@ -522,7 +711,11 @@ async function sendMessage(event) {
 
     renderMessages(result.messages);
     renderMetrics(result.metrics);
-    renderSteps(result.reasoningSteps);
+    const assistantTrace = [...state.messageTraces.entries()].at(-1);
+
+    if (assistantTrace) {
+      selectMessageTrace(assistantTrace[0]);
+    }
     await Promise.all([loadSessions(), loadMemoryStats(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
@@ -564,14 +757,12 @@ async function streamChat(path, options) {
         setInlineProgress(event.content);
         if (event.payload?.graph) {
           state.taskGraph = event.payload.graph;
-          renderTaskGraph(state.taskGraph);
         }
       }
 
-      if (event.type === 'task_graph' && event.payload) {
-        state.taskGraph = event.payload;
-        renderTaskGraph(state.taskGraph);
-      }
+    if (event.type === 'task_graph' && event.payload) {
+      state.taskGraph = event.payload;
+    }
 
       if (event.type === 'final') {
         clearInlineProgress();
@@ -887,6 +1078,11 @@ $('extractInvoice').addEventListener('click', () => runDocumentAction('/document
 $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
+$('openQdrantBrowser').addEventListener('click', openQdrantBrowser);
+$('closeQdrantBrowser').addEventListener('click', closeQdrantBrowser);
+$('qdrantModal').addEventListener('click', event => {
+  if (event.target.id === 'qdrantModal') closeQdrantBrowser();
+});
 $('registerMcp').addEventListener('click', registerMcp);
 
 if ('serviceWorker' in navigator) {
@@ -899,12 +1095,7 @@ renderSteps([]);
 await guarded(async () => {
   await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
-
-  if (state.sessions[0]) {
-    await openSession(state.sessions[0].id);
-  } else {
-    await newSession();
-  }
+  await newSession();
 }, 'Bootstrapping local runtime...');
 
 setInterval(() => {

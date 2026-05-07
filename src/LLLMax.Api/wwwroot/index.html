@@ -17,6 +17,23 @@
       <span id="workLabel">Thinking...</span>
     </div>
   </div>
+  <div id="qdrantModal" class="modal-overlay" hidden>
+    <section class="modal-card qdrant-modal-card">
+      <header class="modal-head">
+        <div>
+          <p class="eyebrow">Vector memory</p>
+          <h2>Qdrant Browser</h2>
+        </div>
+        <button id="closeQdrantBrowser" type="button">Close</button>
+      </header>
+      <div class="modal-body">
+        <div class="qdrant-browser-grid">
+          <div id="qdrantCollectionTable" class="collection-table-wrap"></div>
+          <div id="collectionInspector" class="collection-inspector"></div>
+        </div>
+      </div>
+    </section>
+  </div>
   <main class="shell">
     <aside class="panel left-panel">
       <div class="brand">
@@ -79,8 +96,7 @@
       <details class="panel-section" open>
         <summary>Memory</summary>
         <div id="memoryStats" class="memory-stats"></div>
-        <div id="memoryCollections" class="collection-list"></div>
-        <div id="collectionInspector" class="collection-inspector" hidden></div>
+        <button id="openQdrantBrowser" type="button">Open Qdrant browser</button>
         <button id="consolidateSession" type="button">Consolidate session</button>
         <div id="consolidationJobs" class="job-list"></div>
         <div class="memory-search">
@@ -100,7 +116,7 @@
         <div id="metrics" class="metrics"></div>
       </details>
       <details class="panel-section" open>
-        <summary>Task Graph</summary>
+        <summary>Selected Message Graph</summary>
         <div id="taskGraph" class="task-graph"></div>
       </details>
       <details class="panel-section">
@@ -112,7 +128,7 @@
         <div id="mcpServers" class="mcp-list"></div>
       </details>
       <details class="panel-section" open>
-        <summary>Reasoning Steps</summary>
+        <summary>Selected Message Reasoning</summary>
         <div id="steps" class="steps"></div>
       </details>
       <details class="panel-section">

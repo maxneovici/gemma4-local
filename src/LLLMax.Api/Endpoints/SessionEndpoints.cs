@@ -27,6 +27,9 @@ public static class SessionEndpoints
             return Results.NoContent();
         });
 
+        group.MapDelete("/{id}", async (string id, IAssistantSessionStore sessions, CancellationToken cancellationToken) =>
+            await sessions.DeleteAsync(id, cancellationToken) ? Results.NoContent() : Results.NotFound());
+
         group.MapGet("/{id}", async (string id, IAssistantSessionStore sessions, CancellationToken cancellationToken) =>
         {
             try
