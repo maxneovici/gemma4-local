@@ -5,6 +5,8 @@ obj/
 .vscode/
 *.user
 *.suo
+appsettings.Local.json
+src/**/appsettings.Local.json
 TestResults/
 qdrant_storage/
 data/*.log

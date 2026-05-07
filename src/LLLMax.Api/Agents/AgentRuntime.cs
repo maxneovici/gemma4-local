@@ -248,6 +248,7 @@ public sealed class AgentRuntime(
             "propose_patch" => "Preparing patch proposal...",
             "create_skill" => $"Preparing skill {arguments.GetValueOrDefault("name") ?? "definition"}...",
             "update_skill" => $"Preparing skill update for {arguments.GetValueOrDefault("name") ?? "definition"}...",
+            "smart_home" => $"Running smart-home {arguments.GetValueOrDefault("operation") ?? "operation"}...",
             _ when toolName.StartsWith("mcp_", StringComparison.OrdinalIgnoreCase) => $"Calling MCP tool {toolName}...",
             _ => $"Calling {toolName}..."
         };
@@ -270,6 +271,7 @@ public sealed class AgentRuntime(
             "propose_patch" => "Patch proposal saved. Reviewing result...",
             "create_skill" => "Skill creation step complete. Reviewing result...",
             "update_skill" => "Skill update step complete. Reviewing result...",
+            "smart_home" => "Smart-home operation complete.",
             _ => $"{toolName} complete. Reviewing result..."
         };
 
@@ -321,6 +323,10 @@ Skill instructions:
 - If a useful workflow is missing or the user asks you to remember a workflow, use create_skill when available to create an approval-gated local markdown skill.
 - If an existing skill should change, use update_skill when available instead of generic workspace writes.
 - Skill creation and updates require approval. If approval is required, ask the user to approve it and retry the same tool with only the approvalId.
+
+Smart-home tools:
+- For smart-home light commands, call smart_home directly when it is available.
+- For every/all-lights commands, use device=lights, target=all, and explicit operation=on or operation=off. Do not use ambiguous toggle behavior.
 
 Background work:
 - You can use schedule_background_job for long-running local work that should continue after the chat turn returns.

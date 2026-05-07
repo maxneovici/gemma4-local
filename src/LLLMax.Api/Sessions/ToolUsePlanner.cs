@@ -121,6 +121,7 @@ Routing principles:
 - You are not allowed to answer factual questions, inspect memory, inspect files, claim something exists, or claim something is absent. Your only job is route selection.
 - Choose quick for casual chat, greetings, opinions, and simple explanations that should stream immediately.
 - Choose orchestrate when the main Gemma/coordinator should reason over the request and decide whether tools or subagents are needed.
+- Choose orchestrate for smart-home commands such as turning lights or the TV on or off.
 - Choose clarify when intent is underspecified or required targets are missing.
 - For voice-like casual turns, use responseMode "voice_conversation", low reasoning, and low temperature.
 - For tool or implementation work, use responseMode "task" and the smallest reasoning effort likely to succeed.
@@ -135,6 +136,8 @@ Calibration examples:
 - User asks: "Explain why local memory matters." => quick, voice_conversation, no tools unless the user asks to check stored memory.
 - User asks: "Research the latest docs." => orchestrate, task.
 - User asks: "Run the build." => orchestrate, task.
+- User asks: "Turn all lights on." => orchestrate, task.
+- User asks: "Turn off every light." => orchestrate, task.
 
 Valid JSON shape:
 {
@@ -243,6 +246,7 @@ Recent conversation:
             || lower.Contains("run build")
             || lower.Contains("run tests")
             || lower.Contains("run the tests")
+            || IsSmartHomeCommand(lower)
             || lower.Contains("check local")
             || lower.Contains("persisted memory")
             || lower.Contains("vector memory")
@@ -255,6 +259,10 @@ Recent conversation:
             || lower.Contains("implement")
             || lower.Contains("fix ");
     }
+
+    private static bool IsSmartHomeCommand(string lower) =>
+        (lower.Contains("turn on") || lower.Contains("turn off") || lower.Contains("switch on") || lower.Contains("switch off"))
+        && (lower.Contains("light") || lower.Contains("lights") || lower.Contains("lamp") || lower.Contains("lamps") || lower.Contains("tv"));
 
     private static string NormalizeEffort(string? effort) =>
         effort?.Trim().ToLowerInvariant() switch

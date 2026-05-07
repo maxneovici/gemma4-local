@@ -19,6 +19,8 @@ using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddAntiforgery();
@@ -62,6 +64,22 @@ builder.Services.AddHttpClient("qdrant", (serviceProvider, client) =>
     client.Timeout = TimeSpan.FromSeconds(options.RequestTimeoutSeconds);
 });
 
+builder.Services.AddHttpClient("smart-home-hue", (serviceProvider, client) =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>().Value;
+    client.Timeout = TimeSpan.FromSeconds(options.SmartHome.RequestTimeoutSeconds);
+}).ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+{
+    var options = serviceProvider.GetRequiredService<Microsoft.Extensions.Options.IOptions<LocalAiOptions>>().Value;
+
+    return new HttpClientHandler
+    {
+        ServerCertificateCustomValidationCallback = options.SmartHome.Hue.IgnoreCertificateErrors
+            ? HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            : null
+    };
+});
+
 builder.Services.AddSingleton<LocalDataPaths>();
 builder.Services.AddSingleton<LocalEndpointGuard>();
 builder.Services.AddSingleton<WorkspaceToolSupport>(serviceProvider =>
@@ -103,6 +121,7 @@ builder.Services.AddSingleton<ILocalTool, GitInspectTool>();
 builder.Services.AddSingleton<ILocalTool, PatchProposalTool>();
 builder.Services.AddSingleton<ILocalTool, CreateSkillTool>();
 builder.Services.AddSingleton<ILocalTool, UpdateSkillTool>();
+builder.Services.AddSingleton<ILocalTool, SmartHomeTool>();
 builder.Services.AddSingleton<IEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 {
@@ -167,6 +186,7 @@ app.MapSessionEndpoints();
 app.MapTaskGraphEndpoints();
 app.MapDocumentEndpoints();
 app.MapIntegrationEndpoints();
+app.MapSmartHomeEndpoints();
 
 app.Run();
 

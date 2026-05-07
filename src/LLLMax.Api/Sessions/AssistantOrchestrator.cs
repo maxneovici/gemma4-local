@@ -290,7 +290,7 @@ public sealed class AssistantOrchestrator(
         LocalChatStreamChunk? finalChunk = null;
         var messages = BuildStreamMessages(agent,
         [
-            .. session.Messages.Where(message => message.Role != "assistant"),
+            .. session.Messages.Take(Math.Max(0, session.Messages.Count - 1)),
             new LocalChatMessage("assistant", toolResponse.Response),
             new LocalChatMessage("user", "Stream the final user-facing answer now. Preserve the tool findings exactly, but do not mention internal protocol details.")
         ], null);

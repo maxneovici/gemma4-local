@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>LLLMax.Api</AssemblyName>
     <RootNamespace>LLLMax.Api</RootNamespace>
+    <UserSecretsId>LLLMax.Api.Local</UserSecretsId>
   </PropertyGroup>
 
   <ItemGroup>

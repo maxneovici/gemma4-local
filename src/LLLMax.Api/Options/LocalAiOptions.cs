@@ -58,6 +58,8 @@ public sealed class LocalAiOptions
 
     public LocalMcpOptions Mcp { get; init; } = new();
 
+    public LocalSmartHomeOptions SmartHome { get; init; } = new();
+
     public IReadOnlyList<AgentDefinition> Agents { get; init; } = [];
 
     public IReadOnlyList<LocalModelSeed> RequiredModels { get; init; } = [];
@@ -209,4 +211,41 @@ public sealed class LocalMcpOptions
     public string StorageFile { get; init; } = "mcp-registry.json";
 
     public int RequestTimeoutSeconds { get; init; } = 30;
+}
+
+public sealed class LocalSmartHomeOptions
+{
+    public bool Enabled { get; init; }
+
+    public int RequestTimeoutSeconds { get; init; } = 5;
+
+    public LocalHueOptions Hue { get; init; } = new();
+
+    public LocalSamsungTvOptions SamsungTv { get; init; } = new();
+}
+
+public sealed class LocalHueOptions
+{
+    public string? BridgeHost { get; init; }
+
+    public string? ApplicationKey { get; init; }
+
+    public bool IgnoreCertificateErrors { get; init; } = true;
+
+    public IReadOnlyDictionary<string, string> LightIds { get; init; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+}
+
+public sealed class LocalSamsungTvOptions
+{
+    public string? Host { get; init; }
+
+    public string? MacAddress { get; init; }
+
+    public int RemotePort { get; init; } = 8001;
+
+    public int WakePort { get; init; } = 9;
+
+    public string RemoteName { get; init; } = "LLLMax";
+
+    public string? Token { get; init; }
 }
