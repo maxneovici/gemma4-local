@@ -158,8 +158,72 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
             page));
     }
 
+    public Task<MemoryRecordDetail?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        if (!_collections.TryGetValue(collection, out var records))
+        {
+            return Task.FromResult<MemoryRecordDetail?>(null);
+        }
+
+        lock (records)
+        {
+            var record = records.FirstOrDefault(record => record.Id == id);
+            return Task.FromResult(record is null ? null : ToDetail(record));
+        }
+    }
+
+    public async Task<MemoryRecordDetail?> UpdateRecordAsync(string collection, string id, MemoryRecordUpdateRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Text))
+        {
+            throw new InvalidOperationException("Memory text is required.");
+        }
+
+        if (!_collections.TryGetValue(collection, out var records))
+        {
+            return null;
+        }
+
+        var updated = new MemoryRecord(
+            Id: id,
+            Collection: collection,
+            Text: request.Text,
+            Vector: await embeddingGenerator.GenerateAsync(request.Text, cancellationToken),
+            Metadata: request.Metadata ?? new Dictionary<string, string>());
+
+        lock (records)
+        {
+            var index = records.FindIndex(record => record.Id == id);
+
+            if (index < 0)
+            {
+                return null;
+            }
+
+            records[index] = updated;
+        }
+
+        return ToDetail(updated);
+    }
+
+    public Task<MemoryRecordDeleteResponse> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        if (!_collections.TryGetValue(collection, out var records))
+        {
+            return Task.FromResult(new MemoryRecordDeleteResponse(collection, id, false));
+        }
+
+        lock (records)
+        {
+            return Task.FromResult(new MemoryRecordDeleteResponse(collection, id, records.RemoveAll(record => record.Id == id) > 0));
+        }
+    }
+
     public Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken) =>
         Task.FromResult(new MemoryCollectionDeleteResponse(collection, _collections.TryRemove(collection, out _)));
+
+    private static MemoryRecordDetail ToDetail(MemoryRecord record) =>
+        new(record.Id, record.Collection, record.Text, record.Text.Length, record.Metadata);
 
     private static double CosineSimilarity(float[] left, float[] right)
     {

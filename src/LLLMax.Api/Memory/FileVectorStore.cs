@@ -214,6 +214,73 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
             page);
     }
 
+    public async Task<MemoryRecordDetail?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        var records = await ReadCollectionAsync(collection, cancellationToken);
+        var record = records.FirstOrDefault(record => record.Id == id);
+        return record is null ? null : ToDetail(record);
+    }
+
+    public async Task<MemoryRecordDetail?> UpdateRecordAsync(string collection, string id, MemoryRecordUpdateRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Text))
+        {
+            throw new InvalidOperationException("Memory text is required.");
+        }
+
+        var gate = GetLock(collection);
+        await gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            var records = await ReadCollectionAsync(collection, cancellationToken);
+            var index = records.FindIndex(record => record.Id == id);
+
+            if (index < 0)
+            {
+                return null;
+            }
+
+            var updated = new MemoryRecord(
+                Id: id,
+                Collection: collection,
+                Text: request.Text,
+                Vector: await embeddingGenerator.GenerateAsync(request.Text, cancellationToken),
+                Metadata: request.Metadata ?? new Dictionary<string, string>());
+            records[index] = updated;
+            await WriteCollectionAsync(collection, records, cancellationToken);
+
+            return ToDetail(updated);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
+    public async Task<MemoryRecordDeleteResponse> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        var gate = GetLock(collection);
+        await gate.WaitAsync(cancellationToken);
+
+        try
+        {
+            var records = await ReadCollectionAsync(collection, cancellationToken);
+            var removed = records.RemoveAll(record => record.Id == id) > 0;
+
+            if (removed)
+            {
+                await WriteCollectionAsync(collection, records, cancellationToken);
+            }
+
+            return new MemoryRecordDeleteResponse(collection, id, removed);
+        }
+        finally
+        {
+            gate.Release();
+        }
+    }
+
     public Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken)
     {
         var file = GetCollectionPath(collection);
@@ -256,6 +323,9 @@ public sealed class FileVectorStore(IEmbeddingGenerator embeddingGenerator, Loca
         var safeName = string.Join("_", collection.Split(Path.GetInvalidFileNameChars(), StringSplitOptions.RemoveEmptyEntries));
         return Path.Combine(paths.MemoryDirectory, $"{safeName}.json");
     }
+
+    private static MemoryRecordDetail ToDetail(MemoryRecord record) =>
+        new(record.Id, record.Collection, record.Text, record.Text.Length, record.Metadata);
 
     private static double CosineSimilarity(float[] left, float[] right)
     {

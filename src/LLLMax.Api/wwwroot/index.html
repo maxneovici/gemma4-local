@@ -66,6 +66,10 @@
         <summary>Approvals</summary>
         <div id="approvals" class="approval-list"></div>
       </details>
+      <details class="panel-section">
+        <summary>Patch Proposals</summary>
+        <div id="patchProposals" class="patch-proposal-list"></div>
+      </details>
     </aside>
 
     <section class="chat-card">
@@ -107,6 +111,12 @@
           <input id="memoryQuery" placeholder="search local memory">
           <button id="searchMemory" type="button">Search</button>
         </div>
+        <details class="memory-add">
+          <summary>Remember something</summary>
+          <textarea id="memoryText" rows="3" placeholder="Store a durable local memory..."></textarea>
+          <input id="memoryMetadata" placeholder="metadata: tenant=max category=preference">
+          <button id="addMemory" type="button">Save memory</button>
+        </details>
         <pre id="memoryResults"></pre>
       </details>
       <details class="panel-section" open>

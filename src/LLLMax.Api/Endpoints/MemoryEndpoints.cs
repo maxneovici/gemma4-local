@@ -47,6 +47,28 @@ public static class MemoryEndpoints
         group.MapPost("/collections/{collection}/inspect", async (string collection, MemoryCollectionInspectRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.InspectCollectionAsync(collection, request, cancellationToken)));
 
+        group.MapGet("/collections/{collection}/records/{id}", async (string collection, string id, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            var record = await memoryStore.GetRecordAsync(collection, id, cancellationToken);
+            return record is null ? Results.NotFound() : Results.Ok(record);
+        });
+
+        group.MapPut("/collections/{collection}/records/{id}", async (string collection, string id, MemoryRecordUpdateRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var record = await memoryStore.UpdateRecordAsync(collection, id, request, cancellationToken);
+                return record is null ? Results.NotFound() : Results.Ok(record);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.Problem(exception.Message);
+            }
+        });
+
+        group.MapDelete("/collections/{collection}/records/{id}", async (string collection, string id, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+            Results.Ok(await memoryStore.DeleteRecordAsync(collection, id, cancellationToken)));
+
         group.MapGet("/collections/{collection}/groups", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
         {
             var inspected = await memoryStore.InspectCollectionAsync(collection, new MemoryCollectionInspectRequest(Limit: 100), cancellationToken);

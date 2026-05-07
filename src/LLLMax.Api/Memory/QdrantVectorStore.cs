@@ -256,6 +256,83 @@ public sealed class QdrantVectorStore(
         return new MemoryCollectionInspectResponse(normalized, countResponse.Count, scroll.Result.NextPageOffset?.ToString(), records);
     }
 
+    public async Task<MemoryRecordDetail?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCollection(collection);
+
+        if (string.IsNullOrWhiteSpace(id) || !await CollectionExistsAsync(normalized, cancellationToken))
+        {
+            return null;
+        }
+
+        var response = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(normalized)}/points", new QdrantPointLookupRequest(
+            Ids: [id],
+            WithPayload: true,
+            WithVector: false), JsonOptions, cancellationToken);
+        await ThrowIfFailedAsync(response, $"Qdrant point lookup for {normalized}/{id}", cancellationToken);
+        var lookup = await response.Content.ReadFromJsonAsync<QdrantPointLookupResponse>(JsonOptions, cancellationToken)
+            ?? throw new InvalidOperationException("Qdrant returned an empty point lookup response.");
+        var point = lookup.Result.FirstOrDefault();
+
+        return point is null ? null : ToRecordDetail(normalized, point.Id, point.Payload);
+    }
+
+    public async Task<MemoryRecordDetail?> UpdateRecordAsync(string collection, string id, MemoryRecordUpdateRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(request.Text))
+        {
+            throw new InvalidOperationException("Memory text is required.");
+        }
+
+        var normalized = NormalizeCollection(collection);
+        var existing = await GetRecordAsync(normalized, id, cancellationToken);
+
+        if (existing is null)
+        {
+            return null;
+        }
+
+        var vector = await embeddingGenerator.GenerateAsync(request.Text, cancellationToken);
+        await EnsureCollectionAsync(normalized, vector.Length, cancellationToken);
+        var response = await Client.PutAsJsonAsync($"/collections/{Uri.EscapeDataString(normalized)}/points?wait=true", new QdrantUpsertRequest(
+        [
+            new QdrantPoint(
+                Id: id,
+                Vector: vector,
+                Payload: new Dictionary<string, object?>
+                {
+                    ["collection"] = normalized,
+                    ["text"] = request.Text,
+                    ["metadata"] = request.Metadata ?? new Dictionary<string, string>()
+                })
+        ]), JsonOptions, cancellationToken);
+        await ThrowIfFailedAsync(response, $"Qdrant point update for {normalized}/{id}", cancellationToken);
+
+        return new MemoryRecordDetail(id, normalized, request.Text, request.Text.Length, request.Metadata ?? new Dictionary<string, string>());
+    }
+
+    public async Task<MemoryRecordDeleteResponse> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken)
+    {
+        var normalized = NormalizeCollection(collection);
+
+        if (string.IsNullOrWhiteSpace(id) || !await CollectionExistsAsync(normalized, cancellationToken))
+        {
+            return new MemoryRecordDeleteResponse(normalized, id, false);
+        }
+
+        var existing = await GetRecordAsync(normalized, id, cancellationToken);
+
+        if (existing is null)
+        {
+            return new MemoryRecordDeleteResponse(normalized, id, false);
+        }
+
+        var response = await Client.PostAsJsonAsync($"/collections/{Uri.EscapeDataString(normalized)}/points/delete?wait=true", new QdrantPointDeleteRequest(
+            Points: [id]), JsonOptions, cancellationToken);
+        await ThrowIfFailedAsync(response, $"Qdrant point delete for {normalized}/{id}", cancellationToken);
+        return new MemoryRecordDeleteResponse(normalized, id, true);
+    }
+
     public async Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken)
     {
         var normalized = NormalizeCollection(collection);
@@ -317,6 +394,12 @@ public sealed class QdrantVectorStore(
     {
         var safe = new string(collection.Select(character => char.IsLetterOrDigit(character) || character is '_' or '-' ? character : '_').ToArray()).Trim('_');
         return string.IsNullOrWhiteSpace(safe) ? "default" : safe;
+    }
+
+    private static MemoryRecordDetail ToRecordDetail(string collection, string id, JsonElement payload)
+    {
+        var text = payload.TryGetString("text") ?? string.Empty;
+        return new MemoryRecordDetail(id, collection, text, text.Length, payload.TryGetMetadata());
     }
 
     private static QdrantFilter? BuildFilter(IReadOnlyDictionary<string, string>? filter)
@@ -405,6 +488,15 @@ public sealed class QdrantVectorStore(
     private sealed record QdrantScrollPoint(
         [property: JsonPropertyName("id")] string Id,
         [property: JsonPropertyName("payload")] JsonElement Payload);
+
+    private sealed record QdrantPointLookupRequest(
+        [property: JsonPropertyName("ids")] IReadOnlyList<string> Ids,
+        [property: JsonPropertyName("with_payload")] bool WithPayload,
+        [property: JsonPropertyName("with_vector")] bool WithVector);
+
+    private sealed record QdrantPointLookupResponse([property: JsonPropertyName("result")] IReadOnlyList<QdrantScrollPoint> Result);
+
+    private sealed record QdrantPointDeleteRequest([property: JsonPropertyName("points")] IReadOnlyList<string> Points);
 
     private static string CreatePreview(string text)
     {

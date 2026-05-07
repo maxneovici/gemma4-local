@@ -28,6 +28,10 @@ public sealed record MemoryCollectionInspectRequest(
     string? Cursor = null,
     IReadOnlyDictionary<string, string>? Filter = null);
 
+public sealed record MemoryRecordUpdateRequest(
+    string Text,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
 public sealed record MemoryRecord(
     string Id,
     string Collection,
@@ -60,6 +64,15 @@ public sealed record MemoryCollectionDetail(
     string? Distance = null);
 
 public sealed record MemoryCollectionDeleteResponse(string Name, bool Deleted);
+
+public sealed record MemoryRecordDeleteResponse(string Collection, string Id, bool Deleted);
+
+public sealed record MemoryRecordDetail(
+    string Id,
+    string Collection,
+    string Text,
+    int TextLength,
+    IReadOnlyDictionary<string, string> Metadata);
 
 public sealed record MemoryCollectionRecordPreview(
     string Id,

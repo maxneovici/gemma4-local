@@ -9,6 +9,7 @@ using LLLMax.Api.Integrations;
 using LLLMax.Api.Mcp;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Services;
+using LLLMax.Api.SelfImprovement;
 using LLLMax.Api.Sessions;
 using LLLMax.Api.Storage;
 using LLLMax.Api.Tasks;
@@ -97,6 +98,8 @@ builder.Services.AddSingleton<ILocalTool, SafeShellCommandTool>();
 builder.Services.AddSingleton<ILocalTool, WorkspaceSearchTool>();
 builder.Services.AddSingleton<ILocalTool, WorkspaceReadTool>();
 builder.Services.AddSingleton<ILocalTool, WorkspaceWriteTool>();
+builder.Services.AddSingleton<ILocalTool, GitInspectTool>();
+builder.Services.AddSingleton<ILocalTool, PatchProposalTool>();
 builder.Services.AddSingleton<IEmbeddingGenerator, OllamaEmbeddingGenerator>();
 builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 {
@@ -114,6 +117,7 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, EfApiIntegrationRegistry>();
 builder.Services.AddSingleton<IAssistantSessionStore, EfAssistantSessionStore>();
+builder.Services.AddSingleton<PatchProposalStore>();
 builder.Services.AddSingleton<IBackgroundJobQueue, ChannelBackgroundJobQueue>();
 builder.Services.AddSingleton<IBackgroundJobStore, EfBackgroundJobStore>();
 builder.Services.AddSingleton<IBackgroundJobArtifactStore, EfBackgroundJobArtifactStore>();
@@ -152,6 +156,7 @@ app.MapApprovalEndpoints();
 app.MapMcpEndpoints();
 app.MapMemoryEndpoints();
 app.MapBackgroundJobEndpoints();
+app.MapSelfImprovementEndpoints();
 app.MapRoutingEndpoints();
 app.MapSessionEndpoints();
 app.MapTaskGraphEndpoints();

@@ -19,7 +19,8 @@ const state = {
   selectedTraceId: null,
   consolidationJobs: [],
   approvals: [],
-  mcpServers: []
+  mcpServers: [],
+  patchProposals: []
 };
 
 let knownJobStates = new Map();
@@ -242,19 +243,99 @@ async function loadApprovals() {
   state.approvals = await api('/approvals');
   const pending = state.approvals.filter(approval => approval.status === 'pending');
   const recent = [...pending, ...state.approvals.filter(approval => approval.status !== 'pending')].slice(0, 5);
-  $('approvals').innerHTML = recent.map(approval => `
-    <div class="approval ${escapeHtml(approval.status)}">
-      <strong>${escapeHtml(approval.title)}</strong>
-      <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}${approval.scope ? ` · ${escapeHtml(approval.scope)}` : ''}</span>
-      <p>${escapeHtml(approval.description)}</p>
-      ${approval.status === 'pending' ? `<div class="button-row"><button data-approve-once="${escapeHtml(approval.id)}" type="button">Allow once</button><button data-approve-session="${escapeHtml(approval.id)}" type="button">Allow session</button><button data-approve-persist="${escapeHtml(approval.id)}" type="button">Persist</button><button data-reject="${escapeHtml(approval.id)}" type="button">Reject</button></div>` : ''}
-    </div>
-  `).join('') || '<p class="muted">No approval requests.</p>';
+  $('approvals').innerHTML = recent.map(renderApproval).join('') || '<p class="muted">No approval requests.</p>';
 
   document.querySelectorAll('[data-approve-once]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approveOnce, true, 'once')));
   document.querySelectorAll('[data-approve-session]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approveSession, true, 'session')));
   document.querySelectorAll('[data-approve-persist]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.approvePersist, true, 'persistent')));
   document.querySelectorAll('[data-reject]').forEach(button => button.addEventListener('click', () => decideApproval(button.dataset.reject, false)));
+}
+
+async function loadPatchProposals() {
+  state.patchProposals = await api('/self-improvement/patch-proposals');
+  $('patchProposals').innerHTML = state.patchProposals.slice(0, 8).map(proposal => `
+    <button class="patch-proposal-button" data-open-patch-proposal="${escapeHtml(proposal.id)}" type="button">
+      <strong>${escapeHtml(proposal.fileName)}</strong>
+      <span>${escapeHtml(new Date(proposal.createdAt).toLocaleString())} · ${escapeHtml(proposal.bytes)} bytes</span>
+    </button>
+  `).join('') || '<p class="muted">No saved patch proposals.</p>';
+
+  document.querySelectorAll('[data-open-patch-proposal]').forEach(button => {
+    button.addEventListener('click', () => openPatchProposal(button.dataset.openPatchProposal));
+  });
+}
+
+async function openPatchProposal(id) {
+  await guarded(async () => {
+    const proposal = await api(`/self-improvement/patch-proposals/${encodeURIComponent(id)}`);
+    const container = $('patchProposals');
+    container.innerHTML = `
+      <button id="backToPatchProposals" type="button">Back to proposals</button>
+      <article class="approval-payload patch-proposal saved-patch" open>
+        <strong>${escapeHtml(proposal.fileName)}</strong>
+        <div class="patch-preview">${renderPatchDiff(extractDiffContent(proposal.content))}</div>
+      </article>
+    `;
+    $('backToPatchProposals').addEventListener('click', loadPatchProposals);
+  }, 'Opening patch proposal...', { overlay: false });
+}
+
+function extractDiffContent(content) {
+  const match = String(content ?? '').match(/```diff\n([\s\S]*?)\n```/);
+  return match ? match[1] : content;
+}
+
+function renderApproval(approval) {
+  return `
+    <div class="approval ${escapeHtml(approval.status)}">
+      <strong>${escapeHtml(approval.title)}</strong>
+      <span>${escapeHtml(approval.status)} · ${escapeHtml(approval.kind)}${approval.scope ? ` · ${escapeHtml(approval.scope)}` : ''}</span>
+      <p>${escapeHtml(approval.description)}</p>
+      ${renderApprovalPayload(approval)}
+      ${approval.status === 'pending' ? `<div class="button-row"><button data-approve-once="${escapeHtml(approval.id)}" type="button">Allow once</button><button data-approve-session="${escapeHtml(approval.id)}" type="button">Allow session</button><button data-approve-persist="${escapeHtml(approval.id)}" type="button">Persist</button><button data-reject="${escapeHtml(approval.id)}" type="button">Reject</button></div>` : ''}
+    </div>
+  `;
+}
+
+function renderApprovalPayload(approval) {
+  if (approval.kind === 'propose_patch') {
+    const payload = approval.payload ?? {};
+    const title = payload.title ?? payload.Title ?? 'Patch proposal';
+    const rationale = payload.rationale ?? payload.Rationale ?? '';
+    const patch = payload.patch ?? payload.Patch ?? '';
+    return `
+      <details class="approval-payload patch-proposal" open>
+        <summary>Review proposed patch</summary>
+        <strong>${escapeHtml(title)}</strong>
+        <p>${escapeHtml(rationale)}</p>
+        <div class="patch-preview">${renderPatchDiff(patch)}</div>
+        <p class="approval-hint">Approve to let the agent save this as a local patch proposal artifact, or reject and reply with feedback for another proposal.</p>
+      </details>
+    `;
+  }
+
+  if (approval.kind === 'workspace_write') {
+    const payload = approval.payload ?? {};
+    return `
+      <details class="approval-payload">
+        <summary>Review file write</summary>
+        <strong>${escapeHtml(payload.path ?? payload.Path ?? 'workspace file')}</strong>
+        <pre>${escapeHtml(payload.content ?? payload.Content ?? '')}</pre>
+      </details>
+    `;
+  }
+
+  return '';
+}
+
+function renderPatchDiff(patch) {
+  return String(patch).split('\n').map(line => {
+    const kind = line.startsWith('+') && !line.startsWith('+++') ? 'add'
+      : line.startsWith('-') && !line.startsWith('---') ? 'remove'
+      : line.startsWith('@@') || line.startsWith('***') || line.startsWith('diff --git') ? 'meta'
+      : 'context';
+    return `<div class="diff-line ${kind}">${escapeHtml(line || ' ')}</div>`;
+  }).join('');
 }
 
 async function loadMcpServers() {
@@ -495,22 +576,44 @@ function renderCollectionInspector(result, append = false) {
   `;
 
   $('loadMoreCollectionRecords')?.addEventListener('click', () => inspectCollection(result.collection, { reset: false, append: true, cursor: result.nextCursor }));
+  bindMemoryRecordActions(target);
 }
 
 function renderCollectionRecords(records) {
   return records.map(record => {
-    const metadata = Object.entries(record.metadata ?? {})
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`)
-      .join('');
+    const metadata = renderMetadata(record.metadata ?? {});
     return `
-      <article class="collection-record">
+      <article class="collection-record" data-memory-record="${escapeHtml(record.id)}" data-memory-collection="${escapeHtml(state.selectedCollection ?? '')}">
         <div class="record-head"><code>${escapeHtml(record.id.slice(0, 12))}</code><span>${escapeHtml(record.textLength)} chars</span></div>
         <p>${escapeHtml(record.textPreview || '(empty text)')}</p>
         <div class="metadata-row">${metadata || '<span>no metadata</span>'}</div>
+        <div class="memory-record-actions">
+          <button data-view-memory="${escapeHtml(record.id)}" type="button">View</button>
+          <button data-edit-memory="${escapeHtml(record.id)}" type="button">Edit</button>
+          <button data-delete-memory="${escapeHtml(record.id)}" type="button">Delete</button>
+        </div>
       </article>
     `;
   }).join('') || '<p class="muted">No records matched this filter.</p>';
+}
+
+function bindMemoryRecordActions(root = document) {
+  root.querySelectorAll('[data-view-memory]').forEach(button => {
+    button.addEventListener('click', () => viewMemoryRecord(button.closest('[data-memory-record]')));
+  });
+  root.querySelectorAll('[data-edit-memory]').forEach(button => {
+    button.addEventListener('click', () => editMemoryRecord(button.closest('[data-memory-record]')));
+  });
+  root.querySelectorAll('[data-delete-memory]').forEach(button => {
+    button.addEventListener('click', () => deleteMemoryRecord(button.closest('[data-memory-record]')));
+  });
+}
+
+function renderMetadata(metadata) {
+  return Object.entries(metadata ?? {})
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`)
+    .join('');
 }
 
 function parseMetadataFilter(input) {
@@ -556,6 +659,76 @@ async function deleteCollection(name) {
     await api(`/memory/collections/${encodeURIComponent(name)}`, { method: 'DELETE' });
     await Promise.all([loadMemoryStats(), loadMemoryCollections()]);
   }, 'Deleting collection...');
+}
+
+async function viewMemoryRecord(element) {
+  if (!element) return;
+  await guarded(async () => {
+    const record = await api(memoryRecordPath(element));
+    renderMemoryRecordDetail(element, record);
+  }, 'Loading memory...', { overlay: false });
+}
+
+async function editMemoryRecord(element) {
+  if (!element) return;
+  await guarded(async () => {
+    const record = await api(memoryRecordPath(element));
+    renderMemoryRecordEditor(element, record);
+  }, 'Opening memory editor...', { overlay: false });
+}
+
+async function saveMemoryRecord(element) {
+  await guarded(async () => {
+    const text = element.querySelector('[data-memory-text]').value.trim();
+    if (!text) throw new Error('Memory text is required.');
+    const metadata = parseMetadataFilter(element.querySelector('[data-memory-metadata]').value);
+    const record = await api(memoryRecordPath(element), {
+      method: 'PUT',
+      body: JSON.stringify({ text, metadata })
+    });
+    renderMemoryRecordDetail(element, record);
+    await loadMemoryStats();
+  }, 'Saving memory...', { overlay: false });
+}
+
+async function deleteMemoryRecord(element) {
+  if (!element || !confirm('Delete this memory record?')) return;
+  await guarded(async () => {
+    await api(memoryRecordPath(element), { method: 'DELETE' });
+    element.remove();
+    await loadMemoryStats();
+  }, 'Deleting memory...', { overlay: false });
+}
+
+function renderMemoryRecordDetail(element, record) {
+  element.querySelector('p').textContent = record.text || '(empty text)';
+  element.querySelector('.record-head span').textContent = `${record.textLength} chars`;
+  element.querySelector('.metadata-row').innerHTML = renderMetadata(record.metadata ?? {}) || '<span>no metadata</span>';
+  element.querySelector('.memory-record-actions').innerHTML = `
+    <button data-edit-memory="${escapeHtml(record.id)}" type="button">Edit</button>
+    <button data-delete-memory="${escapeHtml(record.id)}" type="button">Delete</button>
+  `;
+  bindMemoryRecordActions(element);
+}
+
+function renderMemoryRecordEditor(element, record) {
+  element.querySelector('p').innerHTML = `
+    <textarea data-memory-text rows="5">${escapeHtml(record.text)}</textarea>
+    <input data-memory-metadata value="${escapeHtml(formatMetadataFilter(record.metadata ?? {}))}" placeholder="tenant=max category=preference">
+  `;
+  element.querySelector('.record-head span').textContent = `${record.textLength} chars`;
+  element.querySelector('.metadata-row').innerHTML = renderMetadata(record.metadata ?? {}) || '<span>no metadata</span>';
+  element.querySelector('.memory-record-actions').innerHTML = `
+    <button data-save-memory="${escapeHtml(record.id)}" type="button">Save</button>
+    <button data-view-memory="${escapeHtml(record.id)}" type="button">Cancel</button>
+    <button data-delete-memory="${escapeHtml(record.id)}" type="button">Delete</button>
+  `;
+  element.querySelector('[data-save-memory]').addEventListener('click', () => saveMemoryRecord(element));
+  bindMemoryRecordActions(element);
+}
+
+function memoryRecordPath(element) {
+  return `/memory/collections/${encodeURIComponent(element.dataset.memoryCollection)}/records/${encodeURIComponent(element.dataset.memoryRecord)}`;
 }
 
 async function loadConsolidationJobs() {
@@ -700,7 +873,7 @@ async function newSession() {
   $('memoryResults').innerHTML = '';
   $('artifactViewer').hidden = true;
   await Promise.all([loadSessions(), loadMemoryStats()]);
-  await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -725,7 +898,7 @@ async function openSession(id) {
   $('modelSelect').value = session.model ?? '';
   state.selectedTraceId = null;
   renderMessages(session.messages ?? []);
-  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
 }
 
@@ -790,7 +963,7 @@ async function sendMessage(event) {
     if (assistantTrace) {
       selectMessageTrace(assistantTrace[0]);
     }
-    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers(), loadTools()]);
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers(), loadTools()]);
   }, 'Thinking...', { overlay: false }).finally(() => {
     clearInlineProgress();
     $('sendButton').disabled = false;
@@ -1042,13 +1215,30 @@ async function searchMemory() {
     if (!query) return;
     const collection = $('memoryCollectionSelect').value || 'coordinator';
     state.selectedCollection = collection;
-    const filter = parseMetadataFilter($('collectionFilter')?.value ?? '');
     const result = await api('/memory/search', {
       method: 'POST',
-      body: JSON.stringify({ collection, query, limit: 8, filter })
+      body: JSON.stringify({ collection, query, limit: 8 })
     });
     renderMemorySearchResults(collection, query, result);
   }, 'Searching memory...');
+}
+
+async function addMemory() {
+  await guarded(async () => {
+    const collection = $('memoryCollectionSelect').value || 'coordinator';
+    const text = $('memoryText').value.trim();
+
+    if (!text) throw new Error('Memory text is required.');
+
+    await api('/memory/upsert', {
+      method: 'POST',
+      body: JSON.stringify({ collection, text, metadata: parseMetadataFilter($('memoryMetadata').value) })
+    });
+    $('memoryText').value = '';
+    $('memoryMetadata').value = '';
+    await loadMemoryStats();
+    await browseCollection(collection);
+  }, 'Saving memory...');
 }
 
 function renderMemorySearchResults(collection, query, results) {
@@ -1056,20 +1246,23 @@ function renderMemorySearchResults(collection, query, results) {
     <div class="search-summary"><strong>${escapeHtml(collection)}</strong><span>${escapeHtml(results.length)} semantic matches for ${escapeHtml(query)}</span></div>
     <div class="collection-records">
       ${results.map(result => {
-        const metadata = Object.entries(result.metadata ?? {})
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`)
-          .join('');
+        const metadata = renderMetadata(result.metadata ?? {});
         return `
-          <article class="collection-record">
+          <article class="collection-record" data-memory-record="${escapeHtml(result.id)}" data-memory-collection="${escapeHtml(collection)}">
             <div class="record-head"><code>${escapeHtml(result.id.slice(0, 12))}</code><span>score ${escapeHtml(Number(result.score).toFixed(3))}</span></div>
             <p>${escapeHtml(result.text || '(empty text)')}</p>
             <div class="metadata-row">${metadata || '<span>no metadata</span>'}</div>
+            <div class="memory-record-actions">
+              <button data-view-memory="${escapeHtml(result.id)}" type="button">View</button>
+              <button data-edit-memory="${escapeHtml(result.id)}" type="button">Edit</button>
+              <button data-delete-memory="${escapeHtml(result.id)}" type="button">Delete</button>
+            </div>
           </article>
         `;
       }).join('') || '<p class="muted">No semantic matches.</p>'}
     </div>
   `;
+  bindMemoryRecordActions($('memoryResults'));
 }
 
 async function consolidateSession() {
@@ -1096,7 +1289,7 @@ async function decideApproval(id, approve, scope = 'once') {
       method: 'POST',
       body: JSON.stringify({ reason: approve ? `Approved in local UI (${scope}).` : 'Rejected in local UI.', scope })
     });
-    await Promise.all([loadApprovals(), loadTools()]);
+    await Promise.all([loadApprovals(), loadPatchProposals(), loadTools()]);
   }, approve ? 'Approving request...' : 'Rejecting request...');
 }
 
@@ -1151,6 +1344,7 @@ $('runOcr').addEventListener('click', () => runDocumentAction('/documents/ocr'))
 $('extractInvoice').addEventListener('click', () => runDocumentAction('/documents/extract-invoice'));
 $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
+$('addMemory').addEventListener('click', addMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
 $('closeQdrantBrowser').addEventListener('click', closeQdrantBrowser);
 $('qdrantModal').addEventListener('click', event => {
@@ -1165,7 +1359,7 @@ if ('serviceWorker' in navigator) {
 clearResponseDetails();
 
 await guarded(async () => {
-  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadMcpServers()]);
+  await Promise.all([loadModels(), loadAgents(), loadTools(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
   await newSession();
 }, 'Bootstrapping local runtime...');

@@ -18,5 +18,11 @@ public interface ILocalMemoryStore
 
     Task<MemoryCollectionInspectResponse> InspectCollectionAsync(string collection, MemoryCollectionInspectRequest request, CancellationToken cancellationToken);
 
+    Task<MemoryRecordDetail?> GetRecordAsync(string collection, string id, CancellationToken cancellationToken);
+
+    Task<MemoryRecordDetail?> UpdateRecordAsync(string collection, string id, MemoryRecordUpdateRequest request, CancellationToken cancellationToken);
+
+    Task<MemoryRecordDeleteResponse> DeleteRecordAsync(string collection, string id, CancellationToken cancellationToken);
+
     Task<MemoryCollectionDeleteResponse> DeleteCollectionAsync(string collection, CancellationToken cancellationToken);
 }
