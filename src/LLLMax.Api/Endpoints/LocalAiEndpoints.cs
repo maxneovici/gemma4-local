@@ -35,6 +35,12 @@ public static class LocalAiEndpoints
         app.MapGet("/models", async (ILocalChatClient chatClient, CancellationToken cancellationToken) =>
             Results.Ok(await chatClient.GetModelsAsync(cancellationToken)));
 
+        app.MapGet("/models/coordinator", (IRuntimeModelSettings runtimeModels) =>
+            Results.Ok(runtimeModels.GetSnapshot()));
+
+        app.MapPut("/models/coordinator", (CoordinatorModelOverrideRequest request, IRuntimeModelSettings runtimeModels) =>
+            Results.Ok(runtimeModels.SetCoordinatorOverride(request.Model)));
+
         app.MapGet("/models/openai", async (IOllamaApi ollamaApi, CancellationToken cancellationToken) =>
             Results.Ok(await ollamaApi.GetOpenAiModelsAsync(cancellationToken)));
 

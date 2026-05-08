@@ -79,7 +79,7 @@ public sealed class WebResearchJobHandler(
         }
 
         var response = await chatClient.ChatAsync(new LocalChatRequest(
-            Model: request.Model ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel,
+            Model: request.Model ?? _options.Models.CoordinatorModel ?? _options.DefaultModel,
             Temperature: 0.1,
             Messages:
             [

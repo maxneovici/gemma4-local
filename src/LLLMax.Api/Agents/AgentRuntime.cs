@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
@@ -15,7 +16,7 @@ public sealed class AgentRuntime(
     INativeToolChatClient nativeToolChatClient,
     ILocalToolRegistry toolRegistry,
     ILocalMemoryStore memoryStore,
-    IModelRouter modelRouter,
+    IRuntimeModelSettings runtimeModels,
     ISkillRegistry skillRegistry,
     IOptions<LocalAiOptions> options) : IAgentRuntime
 {
@@ -43,9 +44,10 @@ public sealed class AgentRuntime(
 
         var memoryContext = await BuildMemoryContextAsync(agent, request.Message, cancellationToken);
         var toolContext = BuildToolContext(agent, request.AllowTools);
+        var subagentContext = BuildSubagentContext(agent);
         var skillContext = BuildSkillContext(agent, request.Message);
-        var route = modelRouter.Resolve(new ModelRouteRequest(agent, request.Message, request.Model, request.ReasoningEffort));
-        var prompt = BuildSystemPrompt(agent, skillContext, memoryContext, toolContext);
+        var route = ResolveRoute(agent, request);
+        var prompt = BuildSystemPrompt(agent, skillContext, memoryContext, toolContext, subagentContext);
         var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
         reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}; delegationDepth={delegationDepth}", DateTimeOffset.UtcNow));
@@ -118,6 +120,11 @@ public sealed class AgentRuntime(
                 reasoningSteps.Add(new ReasoningStep("tool_retry", "Retrying because a smart-home command requires smart_home tool execution.", DateTimeOffset.UtcNow));
                 messages = AppendRequiredSmartHomeToolInstruction(messages, request.Message);
                 continue;
+            }
+
+            if (toolCall is not null)
+            {
+                toolCall = NormalizeToolCall(agent, toolCall, request.Message);
             }
 
             if (!request.AllowTools || toolCall is null)
@@ -304,7 +311,7 @@ public sealed class AgentRuntime(
     private static Task PublishAsync(AgentRunRequest request, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
         request.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
 
-    private string BuildSystemPrompt(AgentDefinition agent, string skillContext, string memoryContext, string toolContext)
+    private string BuildSystemPrompt(AgentDefinition agent, string skillContext, string memoryContext, string toolContext, string subagentContext)
     {
         var toolCallExample = "{\"tool\":\"tool_name\",\"arguments\":{}}";
 
@@ -320,6 +327,11 @@ Local-first constraints:
 - External HTTP access is only allowed through explicit browsing and API tools.
 - When answering from web_browse or memory_search results, cite source URLs, source files, and chunk indexes from tool output.
 - Use workspace tools only for local project files. workspace_write requires human approval and should be used only for specific requested edits.
+
+Model orchestration:
+- The coordinator model owns routine planning, tool selection, smart-home commands, memory lookups, web browsing, and short summarization.
+- Use regular tools or the researcher agent for routine daily updates, news headline summaries, subreddit checks, and user-interest based browsing.
+- Delegate to deep_researcher only for bounded work that genuinely needs the slower large model, such as dense multi-document synthesis, complex cross-source analysis, or high-stakes report writing.
 
 Personal context and freshness rules:
 - When the user says "my", "mine", "favorite", "usual", "remember", "from before", or similar personal/contextual references and the needed value is not explicit in the current turn, first use memory_search rather than guessing from conversation text.
@@ -345,8 +357,16 @@ Smart-home tools:
 
 Background work:
 - You can use schedule_background_job for long-running local work that should continue after the chat turn returns.
-- Available background job kinds include document_vectorize_folder, memory_report, and web_research. Provide the payload expected by the job kind.
+- Available background job kinds include document_vectorize_folder, memory_report, web_research, and memory_consolidation. Provide the payload expected by the job kind.
+- Use memory_consolidation with a payload containing sessionId=current session id when the user asks to preserve session learnings in the background.
 - Skill create/update tools are foreground approval-gated operations today; use background jobs for large research or verification that informs a skill.
+
+Available delegate agents:
+{subagentContext}
+
+Delegation protocol:
+- Delegate agents are not direct tools. To delegate, call delegate_to_agent with arguments agent and message.
+- If the user explicitly names an allowed delegate agent, use delegate_to_agent and set agent to that exact name.
 
 Relevant skills:
 {skillContext}
@@ -472,10 +492,16 @@ Loop guardrails:
             return "Memory is disabled.";
         }
 
-        var memories = await memoryStore.SearchAsync(new MemorySearchRequest(
-            Collection: agent.Name,
-            Query: message,
-            Limit: _options.Memory.MaxContextItems), cancellationToken);
+        IReadOnlyList<MemorySearchResult> memories;
+
+        try
+        {
+            memories = await SearchMemoryContextAsync(agent, message, cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)
+        {
+            return $"Memory context unavailable: {exception.Message}";
+        }
 
         if (memories.Count == 0)
         {
@@ -486,10 +512,42 @@ Loop guardrails:
 
         foreach (var memory in memories)
         {
-            builder.AppendLine($"- [{memory.Score:0.000}] {memory.Text}");
+            var kind = memory.Metadata.TryGetValue("kind", out var memoryKind) ? memoryKind : "memory";
+            builder.AppendLine($"- [{memory.Score:0.000}] ({kind}) {memory.Text}");
         }
 
         return builder.ToString();
+    }
+
+    private async Task<IReadOnlyList<MemorySearchResult>> SearchMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
+    {
+        var results = new List<MemorySearchResult>();
+        results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
+            Collection: agent.Name,
+            Query: message,
+            Limit: _options.Memory.MaxContextItems), cancellationToken));
+
+        if (!agent.Name.Equals("core", StringComparison.OrdinalIgnoreCase))
+        {
+            results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
+                Collection: "core",
+                Query: message,
+                Limit: _options.Memory.MaxContextItems,
+                Filter: new Dictionary<string, string> { ["category"] = "profile" }), cancellationToken));
+
+            results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
+                Collection: "core",
+                Query: message,
+                Limit: Math.Max(1, _options.Memory.MaxContextItems / 2),
+                Filter: new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken));
+        }
+
+        return results
+            .GroupBy(result => result.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(result => result.Score).First())
+            .OrderByDescending(result => result.Score)
+            .Take(Math.Max(1, _options.Memory.MaxContextItems * 2))
+            .ToList();
     }
 
     private string BuildToolContext(AgentDefinition agent, bool allowTools)
@@ -505,6 +563,32 @@ Loop guardrails:
         return string.Join(Environment.NewLine, tools);
     }
 
+    private string BuildSubagentContext(AgentDefinition agent)
+    {
+        var allowedAgents = agent.AllowedAgents ?? [];
+
+        if (allowedAgents.Count == 0)
+        {
+            return "No delegate agents are allowed for this agent.";
+        }
+
+        var descriptions = allowedAgents.Select(name =>
+        {
+            try
+            {
+                var definition = agentRegistry.GetRequiredAgent(name);
+                var model = string.IsNullOrWhiteSpace(definition.Model) ? "coordinator model" : definition.Model;
+                return $"- {definition.Name} ({model}): {definition.Description}";
+            }
+            catch (InvalidOperationException)
+            {
+                return $"- {name}: configured but unavailable";
+            }
+        });
+
+        return string.Join(Environment.NewLine, descriptions);
+    }
+
     private IReadOnlyList<ILocalTool> GetAllowedTools(AgentDefinition agent, bool allowTools) =>
         allowTools
             ? toolRegistry.GetTools()
@@ -514,6 +598,69 @@ Loop guardrails:
 
     private bool ShouldUseNativeToolCalling(bool allowTools, IReadOnlyList<ILocalTool> allowedTools) =>
         allowTools && allowedTools.Count > 0 && _options.NativeToolCalling.Enabled && _options.NativeToolCalling.PreferNativeTools;
+
+    private static ParsedToolCall NormalizeToolCall(AgentDefinition agent, ParsedToolCall toolCall, string fallbackMessage)
+    {
+        if (toolCall.Tool.Equals("delegate_to_agent", StringComparison.OrdinalIgnoreCase)
+            || agent.AllowedAgents?.Contains(toolCall.Tool, StringComparer.OrdinalIgnoreCase) != true
+            || !IsToolAllowed(agent, "delegate_to_agent"))
+        {
+            return toolCall;
+        }
+
+        var message = TryGetStringArgument(toolCall.Arguments, "message")
+            ?? TryGetStringArgument(toolCall.Arguments, "task")
+            ?? TryGetStringArgument(toolCall.Arguments, "prompt")
+            ?? fallbackMessage;
+        var arguments = new Dictionary<string, JsonElement>
+        {
+            ["agent"] = JsonSerializer.SerializeToElement(toolCall.Tool),
+            ["message"] = JsonSerializer.SerializeToElement(message)
+        };
+
+        return new ParsedToolCall("delegate_to_agent", arguments);
+    }
+
+    private static string? TryGetStringArgument(IReadOnlyDictionary<string, JsonElement> arguments, string name) =>
+        arguments.TryGetValue(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private AgentModelRoute ResolveRoute(AgentDefinition agent, AgentRunRequest request)
+    {
+        var effort = NormalizeEffort(request.ReasoningEffort);
+        var model = request.DelegationDepth == 0
+            ? runtimeModels.GetCoordinatorModel()
+            : agent.Model ?? runtimeModels.GetCoordinatorModel();
+
+        return new AgentModelRoute(model, effort, EnableThinking(effort), request.Temperature ?? Temperature(effort));
+    }
+
+    private string NormalizeEffort(string? effort) =>
+        effort?.Trim().ToLowerInvariant() switch
+        {
+            "medium" => "medium",
+            "high" => "high",
+            "low" => "low",
+            _ => NormalizeConfiguredEffort(_options.Models.DefaultReasoningEffort)
+        };
+
+    private static string NormalizeConfiguredEffort(string? effort) =>
+        effort?.Trim().ToLowerInvariant() switch
+        {
+            "medium" => "medium",
+            "high" => "high",
+            _ => "low"
+        };
+
+    private static bool EnableThinking(string effort) => effort is "medium" or "high";
+
+    private static double Temperature(string effort) => effort switch
+    {
+        "medium" => 0.6,
+        "high" => 0.7,
+        _ => 0.4
+    };
 
     private static void EnsureToolAllowed(AgentDefinition agent, string toolName)
     {
@@ -530,13 +677,20 @@ Loop guardrails:
 
     private async Task PersistInteractionAsync(AgentDefinition agent, AgentRunRequest request, string response, CancellationToken cancellationToken)
     {
-        await memoryStore.UpsertAsync(new MemoryUpsertRequest(
-            Collection: agent.Name,
-            Text: $"User: {request.Message}{Environment.NewLine}{agent.Name}: {response}",
-            Metadata: new Dictionary<string, string>
-            {
-                ["agent"] = agent.Name,
-                ["conversationId"] = request.ConversationId ?? string.Empty
-            }), cancellationToken);
+        try
+        {
+            await memoryStore.UpsertAsync(new MemoryUpsertRequest(
+                Collection: agent.Name,
+                Text: $"User: {request.Message}{Environment.NewLine}{agent.Name}: {response}",
+                Metadata: new Dictionary<string, string>
+                {
+                    ["agent"] = agent.Name,
+                    ["conversationId"] = request.ConversationId ?? string.Empty
+                }), cancellationToken);
+        }
+        catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)
+        {
+            // Passive memory persistence must not fail an otherwise successful chat turn.
+        }
     }
 }

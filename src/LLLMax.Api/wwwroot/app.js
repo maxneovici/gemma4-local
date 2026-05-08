@@ -31,7 +31,7 @@ const state = {
 let knownJobStates = new Map();
 
 const $ = id => document.getElementById(id);
-const effortMap = ['low', 'auto', 'high'];
+const effortMap = ['low', 'medium', 'high'];
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -255,7 +255,7 @@ function isGuidLike(value) {
 
 async function loadModels() {
   state.models = await api('/models');
-  $('modelSelect').innerHTML = '<option value="">Auto route</option>' + state.models.map(model => `
+  $('modelSelect').innerHTML = '<option value="">Coordinator default</option>' + state.models.map(model => `
     <option value="${escapeHtml(model.name)}">${escapeHtml(model.name)}</option>
   `).join('');
 }
@@ -1046,14 +1046,13 @@ async function sendMessage(event) {
     $('prompt').disabled = true;
     const existingMessages = documentMessages();
     renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '', draftId: state.activeAssistantId }]);
-    setInlineProgress('Routing request...');
+    setInlineProgress('Starting coordinator...');
 
     const result = await streamChat(`/sessions/${state.sessionId}/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         message,
-        model: $('modelSelect').value || null,
         reasoningEffort: effortMap[$('effort').value],
         allowTools: $('allowTools').checked,
         persistToMemory: $('persistMemory').checked
@@ -1175,7 +1174,6 @@ async function recoverFinalResponse() {
     throw new Error('Streaming chat ended before a final response was saved.');
   }
 
-  const routeStep = last.reasoningSteps?.find?.(step => step.kind === 'route');
   return {
     sessionId: state.sessionId,
     response: last.content,
@@ -1183,7 +1181,7 @@ async function recoverFinalResponse() {
     metrics: null,
     reasoningSteps: last.reasoningSteps ?? [],
     summarized: false,
-    route: routeStep ? { reason: routeStep.content } : null
+    route: null
   };
 }
 

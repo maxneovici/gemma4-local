@@ -30,7 +30,7 @@ public sealed class EfAssistantSessionStore(
             Id: Guid.NewGuid().ToString("n"),
             Title: string.IsNullOrWhiteSpace(request.Title) ? "New LLLMax session" : request.Title.Trim(),
             Agent: string.IsNullOrWhiteSpace(request.Agent) ? _options.Orchestration.DefaultAgent : request.Agent.Trim(),
-            Model: request.Model,
+            Model: null,
             Summary: null,
             CreatedAt: now,
             UpdatedAt: now,

@@ -42,7 +42,7 @@ public sealed class LocalAiOptions
 
     public LocalAiOrchestrationOptions Orchestration { get; init; } = new();
 
-    public LocalAiModelRouterOptions ModelRouter { get; init; } = new();
+    public LocalAiModelOptions Models { get; init; } = new();
 
     public LocalAiNativeToolCallingOptions NativeToolCalling { get; init; } = new();
 
@@ -137,29 +137,11 @@ public sealed class LocalAiOrchestrationOptions
     public int MaxSkillContextCharacters { get; init; } = 4000;
 }
 
-public sealed class LocalAiModelRouterOptions
+public sealed class LocalAiModelOptions
 {
-    public bool UseAiPlanner { get; init; } = true;
+    public string? CoordinatorModel { get; init; }
 
-    public string? RouterModel { get; init; }
-
-    public string RouterSystemPrompt { get; init; } = "You are the LLLMax routing planner. You infer user intent and choose local execution parameters. You do not answer the user. You return strict JSON only.";
-
-    public int RouterMaxOutputTokens { get; init; } = 160;
-
-    public int RouterMaxRecentMessages { get; init; } = 4;
-
-    public string RouterKeepAlive { get; init; } = "30m";
-
-    public string? InteractiveModel { get; init; }
-
-    public string? BalancedModel { get; init; }
-
-    public string? DeepReasoningModel { get; init; }
-
-    public string DefaultReasoningEffort { get; init; } = "auto";
-
-    public int ShortRequestWordThreshold { get; init; } = 18;
+    public string DefaultReasoningEffort { get; init; } = "low";
 }
 
 public sealed class LocalAiNativeToolCallingOptions

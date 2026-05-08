@@ -14,8 +14,8 @@ The app is intentionally configured to use loopback-only Ollama endpoints by def
 - `IAgentRuntime` runs configured local agents with a multi-iteration tool loop.
 - `MarkdownAgentRegistry` merges configured agents with dynamic `.md` agent definitions in `data/agents`.
 - `IAssistantOrchestrator` owns sessions, context estimation, and summarization near context limits.
-- `IToolUsePlanner` uses a small router model to infer intent, response mode, effort, and direct-vs-orchestrated policy before the coordinator chooses any tools or subagents.
-- `IModelRouter` chooses interactive, balanced, or deep-reasoning response models per request.
+- The configured coordinator model handles tool and subagent decisions directly; there is no separate model-router pass in the chat hot path.
+- Larger models are opt-in through specialist agents, explicit per-request model selection, or background-job payload overrides.
 - `ILocalToolRegistry` exposes local tools to agents.
 - `ILocalMemoryStore` stores local vector memory; the default implementation persists JSON under `data/memory`.
 - `/`, `/sessions`, `/agents`, `/memory`, `/documents`, `/integrations`, `/models`, `/health`, and `/openai` expose the local app and API.
@@ -60,8 +60,8 @@ Important flags:
 - `LocalAi:RequireLoopback=true` blocks non-local model endpoints.
 - `LocalAi:EnsureDefaultModel=true` runs `ollama pull <DefaultModel>` at startup if the model is missing.
 - `LocalAi:StopManagedProcessOnShutdown=true` stops only the process started by this app.
-- `LocalAi:ModelRouter:RouterModel=gemma4:e2b` keeps routing on the fastest local model while preserving intent and parameter extraction.
-- `LocalAi:ModelRouter:RouterMaxOutputTokens=160` caps planner output to reduce first-token latency.
+- `LocalAi:Models:CoordinatorModel=gemma4:e2b` keeps the main orchestration loop on the fastest local model.
+- Bind large models such as `gemma4:31b` only on selected specialist agents or explicit per-job payloads.
 - `LocalAi:Memory:EmbeddingModel=nomic-embed-text` uses a dedicated local embedding model for vector memory.
 - `LocalAi:Tools:EnableSafeShell=false` keeps local shell execution disabled unless explicitly enabled.
 
@@ -99,10 +99,10 @@ Useful Gemma 4 model tags:
 - `gemma4:26b` - MoE workstation model with about 4B active parameters
 - `gemma4:31b` - flagship dense local model, about 20GB
 
-Switch model with configuration:
+Switch the coordinator model with configuration:
 
 ```bash
-LocalAi__DefaultModel=gemma4:31b dotnet run --project src/LLLMax.Api
+LocalAi__Models__CoordinatorModel=gemma4:e4b dotnet run --project src/LLLMax.Api
 ```
 
 ## Run

@@ -1,7 +1,9 @@
 using System.Runtime.CompilerServices;
 using System.Text;
+using System.Text.Json;
 using System.Threading.Channels;
 using LLLMax.Api.Agents;
+using LLLMax.Api.BackgroundJobs;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
@@ -16,8 +18,8 @@ public sealed class AssistantOrchestrator(
     ILocalChatClient chatClient,
     ITaskGraphService taskGraphs,
     IAgentRegistry agentRegistry,
-    IModelRouter modelRouter,
-    IToolUsePlanner toolUsePlanner,
+    IBackgroundJobService backgroundJobs,
+    IRuntimeModelSettings runtimeModels,
     IOptions<LocalAiOptions> options) : IAssistantOrchestrator
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -39,8 +41,7 @@ public sealed class AssistantOrchestrator(
             summarized = true;
         }
 
-        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var toolDecision = await DecideToolUseAsync(request, agent, messages, cancellationToken);
+        var route = BuildRoute(request, session);
         Func<AgentRuntimeEvent, CancellationToken, Task> onEvent = async (runtimeEvent, token) =>
         {
             if (runtimeEvent.Tool is not null)
@@ -59,24 +60,25 @@ public sealed class AssistantOrchestrator(
             AllowTools: request.AllowTools,
             PersistToMemory: request.PersistToMemory,
             ConversationId: session.Id,
-            Model: ResolveRunModel(request, session, toolDecision),
-            ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
-            Temperature: toolDecision.Temperature,
+            Model: route.Model,
+            ReasoningEffort: route.ReasoningEffort,
+            Temperature: route.Temperature,
             Messages: messages,
             DelegationDepth: 0,
             OnEvent: onEvent), cancellationToken);
 
         var completedGraph = await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, agentResponse.ReasoningSteps ?? [], cancellationToken);
-        var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
+        var reasoningSteps = agentResponse.ReasoningSteps ?? [];
         var assistantMessage = new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, taskGraphs.SnapshotCurrentTurn(completedGraph), agentResponse.ToolTraces, agentResponse.Citations);
         var nextMessages = messages.Concat([assistantMessage]).ToList();
         await sessions.SaveAsync(session with
         {
             Agent = request.Agent ?? session.Agent,
-            Model = request.Model ?? session.Model,
+            Model = null,
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
+        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
 
         return new SessionChatResponse(
             SessionId: session.Id,
@@ -85,7 +87,7 @@ public sealed class AssistantOrchestrator(
             Metrics: agentResponse.Metrics,
             ReasoningSteps: reasoningSteps,
             Summarized: summarized,
-            Route: toolDecision);
+            Route: route);
     }
 
     public async IAsyncEnumerable<SessionChatStreamEvent> StreamChatAsync(
@@ -96,22 +98,12 @@ public sealed class AssistantOrchestrator(
         var session = await sessions.GetAsync(sessionId, cancellationToken);
         var graph = await taskGraphs.RecordRunStartedAsync(sessionId, request.Message, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
-        var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var toolDecision = await DecideToolUseAsync(request, agent, session.Messages.Concat([new LocalChatMessage("user", request.Message)]).ToList(), cancellationToken);
-        yield return new SessionChatStreamEvent("progress", $"Route: {toolDecision.Policy}. {toolDecision.Reason}", Payload: toolDecision);
+        var route = BuildRoute(request, session);
+        yield return new SessionChatStreamEvent("progress", $"Thinking with {route.Model}.", Payload: route);
 
-        if (toolDecision.ShouldUseOrchestrator)
+        if (!request.AllowTools)
         {
-            var toolResponse = StreamToolRunAsync(session, request, toolDecision, cancellationToken);
-
-            await foreach (var streamEvent in toolResponse.Events.WithCancellation(cancellationToken))
-            {
-                yield return streamEvent;
-            }
-
-            var postTool = StreamFinalAnswerAsync(sessionId, request, await toolResponse.Result, cancellationToken);
-
-            await foreach (var streamEvent in postTool)
+            await foreach (var streamEvent in StreamDirectAsync(session, request, route, cancellationToken))
             {
                 yield return streamEvent;
             }
@@ -119,16 +111,20 @@ public sealed class AssistantOrchestrator(
             yield break;
         }
 
-        await foreach (var streamEvent in StreamDirectAsync(session, request, toolDecision, cancellationToken))
+        var toolResponse = StreamToolRunAsync(session, request, route, cancellationToken);
+
+        await foreach (var streamEvent in toolResponse.Events.WithCancellation(cancellationToken))
         {
             yield return streamEvent;
         }
+
+        yield return new SessionChatStreamEvent("final", Result: await toolResponse.Result);
     }
 
     private ToolRunStream StreamToolRunAsync(
         AssistantSession session,
         SessionChatRequest request,
-        ToolUseDecision toolDecision,
+        SessionRoute route,
         CancellationToken cancellationToken)
     {
         var channel = Channel.CreateUnbounded<SessionChatStreamEvent>();
@@ -160,23 +156,24 @@ public sealed class AssistantOrchestrator(
                     AllowTools: request.AllowTools,
                     PersistToMemory: request.PersistToMemory,
                     ConversationId: session.Id,
-                    Model: ResolveRunModel(request, session, toolDecision),
-                    ReasoningEffort: request.ReasoningEffort ?? toolDecision.ReasoningEffort,
-                    Temperature: toolDecision.Temperature,
+                    Model: route.Model,
+                    ReasoningEffort: route.ReasoningEffort,
+                    Temperature: route.Temperature,
                     Messages: messages,
                     DelegationDepth: 0,
                     OnEvent: onEvent), cancellationToken);
 
                 var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
-                var reasoningSteps = WithToolDecision(toolDecision, agentResponse.ReasoningSteps ?? []);
+                var reasoningSteps = agentResponse.ReasoningSteps ?? [];
                 var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, graph is null ? null : taskGraphs.SnapshotCurrentTurn(graph), agentResponse.ToolTraces, agentResponse.Citations)]).ToList();
                 await sessions.SaveAsync(session with
                 {
                     Agent = request.Agent ?? session.Agent,
-                    Model = request.Model ?? session.Model,
+                    Model = null,
                     UpdatedAt = DateTimeOffset.UtcNow,
                     Messages = nextMessages
                 }, cancellationToken);
+                await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
 
                 if (graph is not null)
                 {
@@ -190,7 +187,7 @@ public sealed class AssistantOrchestrator(
                     Metrics: agentResponse.Metrics,
                     ReasoningSteps: reasoningSteps,
                     Summarized: false,
-                    Route: toolDecision);
+                    Route: route);
             }
             finally
             {
@@ -204,7 +201,7 @@ public sealed class AssistantOrchestrator(
     private async IAsyncEnumerable<SessionChatStreamEvent> StreamDirectAsync(
         AssistantSession session,
         SessionChatRequest request,
-        ToolUseDecision toolDecision,
+        SessionRoute route,
         [EnumeratorCancellation] CancellationToken cancellationToken)
     {
         var userMessage = new LocalChatMessage("user", request.Message);
@@ -221,8 +218,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var route = ResolveStreamRoute(agent, request, session, toolDecision);
-        var streamMessages = BuildStreamMessages(agent, messages, toolDecision);
+        var streamMessages = BuildStreamMessages(agent, messages, route);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
 
@@ -242,7 +238,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var response = responseBuilder.ToString();
-        var reasoningSteps = WithToolDecision(toolDecision, [new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow)]);
+        var reasoningSteps = new[] { new ReasoningStep("stream", "Response streamed directly without tools.", DateTimeOffset.UtcNow) };
         var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, response, reasoningSteps, cancellationToken);
         var nextMessages = messages.Concat([new LocalChatMessage("assistant", response, Guid.NewGuid().ToString("n"), reasoningSteps, taskGraphs.SnapshotCurrentTurn(graph), [], [])]).ToList();
         var metrics = new AgentRunMetrics(
@@ -260,15 +256,16 @@ public sealed class AssistantOrchestrator(
             Metrics: metrics,
             ReasoningSteps: reasoningSteps,
             Summarized: summarized,
-            Route: toolDecision);
+            Route: route);
 
         await sessions.SaveAsync(session with
         {
             Agent = request.Agent ?? session.Agent,
-            Model = request.Model ?? session.Model,
+            Model = null,
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
+        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
         yield return new SessionChatStreamEvent("final", Result: finalResponse);
     }
@@ -293,7 +290,7 @@ public sealed class AssistantOrchestrator(
 
         var session = await sessions.GetAsync(sessionId, cancellationToken);
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var route = ResolveStreamRoute(agent, request, session, toolResponse.Route);
+        var route = BuildRoute(request, session);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
         var messages = BuildStreamMessages(agent,
@@ -352,12 +349,6 @@ public sealed class AssistantOrchestrator(
         return ContextEstimator.EstimateTokens(messages) >= triggerTokens;
     }
 
-    private async Task<ToolUseDecision> DecideToolUseAsync(SessionChatRequest request, AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken) =>
-        await toolUsePlanner.DecideAsync(new ToolUsePlanningRequest(request.Message, agent, request.AllowTools, messages), cancellationToken);
-
-    private static IReadOnlyList<ReasoningStep> WithToolDecision(ToolUseDecision decision, IReadOnlyList<ReasoningStep> steps) =>
-        [new ReasoningStep("route", $"intent={decision.Intent}; mode={decision.ResponseMode}; policy={decision.Policy}; model={decision.Model}; reasoning={decision.ReasoningEffort}; temperature={decision.Temperature:0.00}; confidence={decision.Confidence:0.00}; reason={decision.Reason}", DateTimeOffset.UtcNow), .. steps];
-
     private static string RuntimeEventStatus(AgentRuntimeEvent runtimeEvent) =>
         runtimeEvent.Kind switch
         {
@@ -369,7 +360,7 @@ public sealed class AssistantOrchestrator(
     private async Task<string> SummarizeAsync(AssistantSession session, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken)
     {
         var response = await chatClient.ChatAsync(new LocalChatRequest(
-            Model: session.Model,
+            Model: runtimeModels.GetCoordinatorModel(),
             Messages:
             [
                 new LocalChatMessage("system", "Summarize this conversation for future context. Preserve goals, decisions, constraints, tool findings, and unresolved tasks. Be concise."),
@@ -380,26 +371,43 @@ public sealed class AssistantOrchestrator(
         return response.Response;
     }
 
-    private ModelRoute ResolveStreamRoute(AgentDefinition agent, SessionChatRequest request, AssistantSession session, ToolUseDecision? decision)
+    private SessionRoute BuildRoute(SessionChatRequest request, AssistantSession session)
     {
-        var route = modelRouter.Resolve(new ModelRouteRequest(
-            agent,
-            request.Message,
-            request.Model ?? session.Model ?? decision?.Model ?? (decision?.ShouldUseOrchestrator == true ? PreferredOrchestratorModel : null),
-            request.ReasoningEffort ?? decision?.ReasoningEffort));
+        var effort = NormalizeEffort(request.ReasoningEffort);
+        var model = runtimeModels.GetCoordinatorModel();
 
-        return decision is null ? route : route with { Temperature = decision.Temperature };
+        return new SessionRoute(model, effort, EnableThinking(effort), Temperature(effort));
     }
 
-    private string? ResolveRunModel(SessionChatRequest request, AssistantSession session, ToolUseDecision decision) =>
-        request.Model ?? session.Model ?? decision.Model ?? (decision.ShouldUseOrchestrator ? PreferredOrchestratorModel : null);
+    private string NormalizeEffort(string? effort) =>
+        effort?.Trim().ToLowerInvariant() switch
+        {
+            "medium" => "medium",
+            "high" => "high",
+            "low" => "low",
+            _ => NormalizeConfiguredEffort(_options.Models.DefaultReasoningEffort)
+        };
 
-    private string PreferredOrchestratorModel =>
-        _options.ModelRouter.DeepReasoningModel ?? _options.ModelRouter.BalancedModel ?? _options.DefaultModel;
+    private static string NormalizeConfiguredEffort(string? effort) =>
+        effort?.Trim().ToLowerInvariant() switch
+        {
+            "medium" => "medium",
+            "high" => "high",
+            _ => "low"
+        };
 
-    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, ToolUseDecision? toolDecision)
+    private static bool EnableThinking(string effort) => effort is "medium" or "high";
+
+    private static double Temperature(string effort) => effort switch
     {
-        var basePrompt = toolDecision?.Policy.Equals(ToolUsePolicies.Direct, StringComparison.OrdinalIgnoreCase) == true
+        "medium" => 0.6,
+        "high" => 0.7,
+        _ => 0.4
+    };
+
+    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, SessionRoute? route)
+    {
+        var basePrompt = route?.ResponseMode.Equals(ResponseModes.VoiceConversation, StringComparison.OrdinalIgnoreCase) == true
             ? _options.ConversationSystemPrompt
             : _options.SystemPrompt;
         var systemPrompt = $"{basePrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
@@ -408,4 +416,21 @@ public sealed class AssistantOrchestrator(
     }
 
     private sealed record ToolRunStream(IAsyncEnumerable<SessionChatStreamEvent> Events, Task<SessionChatResponse> Result);
+
+    private async Task ScheduleMemoryConsolidationAsync(string sessionId, bool persistToMemory, CancellationToken cancellationToken)
+    {
+        if (!persistToMemory || !_options.Memory.Enabled)
+        {
+            return;
+        }
+
+        var payload = JsonSerializer.SerializeToElement(new Memory.MemoryConsolidationRequest(sessionId, Collection: "core"));
+        await backgroundJobs.EnqueueAsync(new BackgroundJobCreateRequest(
+            Kind: BackgroundJobKinds.MemoryConsolidation,
+            Payload: payload,
+            Title: "Consolidate session memory",
+            SessionId: sessionId,
+            Agent: _options.Orchestration.DefaultAgent,
+            NotifySession: false), cancellationToken);
+    }
 }

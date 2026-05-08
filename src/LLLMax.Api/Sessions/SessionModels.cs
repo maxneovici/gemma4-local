@@ -3,12 +3,11 @@ using LLLMax.Api.Models;
 
 namespace LLLMax.Api.Sessions;
 
-public sealed record SessionCreateRequest(string? Title = null, string? Agent = null, string? Model = null);
+public sealed record SessionCreateRequest(string? Title = null, string? Agent = null);
 
 public sealed record SessionChatRequest(
     string Message,
     string? Agent = null,
-    string? Model = null,
     string? ReasoningEffort = null,
     bool AllowTools = true,
     bool PersistToMemory = true);
@@ -20,7 +19,21 @@ public sealed record SessionChatResponse(
     AgentRunMetrics? Metrics,
     IReadOnlyList<ReasoningStep> ReasoningSteps,
     bool Summarized,
-    ToolUseDecision? Route = null);
+    SessionRoute? Route = null);
+
+public sealed record SessionRoute(
+    string Model,
+    string ReasoningEffort,
+    bool EnableThinking,
+    double Temperature,
+    string ResponseMode = ResponseModes.Task,
+    string Reason = "Coordinator model handles tools and delegation.");
+
+public static class ResponseModes
+{
+    public const string VoiceConversation = "voice_conversation";
+    public const string Task = "task";
+}
 
 public sealed record SessionChatStreamEvent(
     string Type,

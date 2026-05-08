@@ -66,6 +66,8 @@ public sealed record AgentRunMetrics(
     double? TokensPerSecond,
     int EstimatedContextTokens);
 
+public sealed record AgentModelRoute(string Model, string ReasoningEffort, bool EnableThinking, double Temperature);
+
 public sealed record AgentRuntimeEvent(
     string Kind,
     string Content,
