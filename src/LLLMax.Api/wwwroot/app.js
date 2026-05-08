@@ -18,9 +18,11 @@ const state = {
   memoryGraphPanY: 0,
   memoryGraphFocusId: null,
   memoryGraphFocusLabel: null,
+  memoryGraphDrillLevel: 0,
   memoryGraphTypes: [],
   memoryGraphFilter: null,
   memoryGraphScope: 'total',
+  memoryReviewOpen: false,
   memoryReview: null,
   foundationProfile: null,
   selectedCollection: null,
@@ -926,22 +928,22 @@ function renderMemoryDashboardStage(stats, profile, reflected) {
       <button data-graph-scope="canonical" class="dashboard-scope ${graphScopeActive('canonical') ? 'active' : ''}" type="button"><span>Canonical Facts</span><strong>${escapeHtml(profile?.factCount ?? 0)}</strong></button>
     </section>
     <section class="dashboard-graph-panel">
-      <div class="graph-toolbar">
-        <input id="memoryGraphQuery" class="graph-search-input ${state.memoryGraphSearchOpen ? 'open' : ''}" value="${escapeHtml(state.memoryGraphQuery)}" placeholder="Search graph..." ${state.memoryGraphSearchOpen ? '' : 'hidden'}>
-        <button id="openMemoryGraphSearch" class="graph-search-toggle ${state.memoryGraphSearchOpen ? 'active' : ''}" type="button" aria-label="Search graph">⌕</button>
-      </div>
       <div class="graph-type-filters">
         ${memoryGraphTypes().map(type => `<button data-graph-type="${escapeHtml(type)}" class="${state.memoryGraphTypes.includes(type) ? 'active' : ''}" type="button">${escapeHtml(type)}</button>`).join('')}
+        <span class="graph-filter-spacer"></span>
+        <input id="memoryGraphQuery" class="graph-search-input ${state.memoryGraphSearchOpen ? 'open' : ''}" value="${escapeHtml(state.memoryGraphQuery)}" placeholder="Search graph..." ${state.memoryGraphSearchOpen ? '' : 'hidden'}>
+        <button id="openMemoryGraphSearch" class="graph-icon-button ${state.memoryGraphSearchOpen ? 'active' : ''}" type="button" aria-label="Search graph">${searchIconSvg()}</button>
+        <button id="openMemoryReview" class="graph-icon-button ${state.memoryReviewOpen ? 'active' : ''}" type="button" aria-label="Review inbox">${messageIconSvg()}</button>
       </div>
       <div id="memoryGraphCanvas" class="memory-graph-canvas"></div>
       <div id="memoryGraphInspector" class="memory-graph-inspector"></div>
-      <div id="memoryReviewInbox" class="memory-review-inbox"></div>
+      <div id="memoryReviewInbox" class="memory-review-inbox" ${state.memoryReviewOpen ? '' : 'hidden'}></div>
     </section>
     <section class="dashboard-grid">
-      <article class="wide">
-        <h3>Recent Canonical Profile Layer <span>${escapeHtml(reflected)}</span></h3>
+      <details class="canonical-profile-details">
+        <summary>Recent Canonical Profile Layer <span>${escapeHtml(reflected)}</span></summary>
         ${facts.slice(0, 6).map(fact => `<p><span>${escapeHtml(fact.category || 'profile')}</span><b>${escapeHtml(fact.text)}</b></p>`).join('') || '<p class="muted">Run reflection to populate profile facts.</p>'}
-      </article>
+      </details>
     </section>
   `;
   bindMemoryGraphControls();
@@ -1005,6 +1007,11 @@ function bindMemoryGraphControls() {
       setTimeout(() => $('memoryGraphQuery')?.focus(), 0);
     }
   });
+  $('openMemoryReview')?.addEventListener('click', () => {
+    state.memoryReviewOpen = !state.memoryReviewOpen;
+    renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+    renderMemoryReviewInbox();
+  });
   $('memoryGraphQuery')?.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
       submitMemoryGraphSearch(event.target.value);
@@ -1022,6 +1029,14 @@ function bindMemoryGraphControls() {
   });
 }
 
+function searchIconSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"></circle><path d="m16 16 4 4"></path></svg>';
+}
+
+function messageIconSvg() {
+  return '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5h14v10H8l-3 3V5Z"></path><path d="M8 9h8M8 12h5"></path></svg>';
+}
+
 function graphScopeActive(scope) {
   return state.memoryGraphScope === scope;
 }
@@ -1030,6 +1045,7 @@ function setMemoryGraphScope(scope) {
   state.memoryGraphScope = scope ?? 'total';
   state.memoryGraphFocusId = null;
   state.memoryGraphFocusLabel = null;
+  state.memoryGraphDrillLevel = 0;
   state.memoryGraphQuery = '';
   state.memoryGraphSearchOpen = false;
   state.memoryGraphTypes = [];
@@ -1054,6 +1070,7 @@ function submitMemoryGraphSearch(value) {
   state.memoryGraphSearchOpen = false;
   state.memoryGraphFocusId = null;
   state.memoryGraphFocusLabel = null;
+  state.memoryGraphDrillLevel = 0;
   renderMemoryDashboard(state.memoryStats, state.memoryProfile);
   loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
 }
@@ -1066,6 +1083,7 @@ function setMemoryGraphZoom(value) {
 function resetMemoryGraphDrilldown(reload = true) {
   state.memoryGraphFocusId = null;
   state.memoryGraphFocusLabel = null;
+  state.memoryGraphDrillLevel = 0;
   resetMemoryGraphView();
   if (reload) {
     return loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
@@ -1100,10 +1118,13 @@ function renderMemoryGraphCanvas() {
     x: center + ((node.x - 50) * 5.15 * zoom),
     y: center + ((node.y - 50) * 5.15 * zoom)
   });
-  const nodeById = new Map((graph.nodes ?? []).map(node => [node.id, node]));
   const edges = graph.edges ?? [];
   const nodes = graph.nodes ?? [];
   const isDrilled = Boolean(state.memoryGraphFocusId);
+  const showRecords = state.memoryGraphDrillLevel >= 2;
+  const visibleNodes = showRecords ? nodes : nodes.filter(node => node.kind !== 'record');
+  const visibleNodeById = new Map(visibleNodes.map(node => [node.id, node]));
+  const visibleEdges = showRecords ? edges : edges.filter(edge => edge.kind !== 'mentions');
 
   canvas.innerHTML = `
     <svg class="memory-graph-svg" viewBox="0 0 600 600" role="img" aria-label="${escapeHtml(graph.layer)} vector graph" tabindex="0">
@@ -1114,8 +1135,8 @@ function renderMemoryGraphCanvas() {
       <circle cx="300" cy="300" r="238" class="graph-orbit"></circle>
       <circle cx="300" cy="300" r="145" class="graph-orbit inner"></circle>
       <g class="graph-viewport" transform="translate(${panX.toFixed(1)} ${panY.toFixed(1)})">
-        ${edges.map(edge => renderGraphEdge(edge, nodeById, project)).join('')}
-        ${nodes.map(node => renderGraphNode(node, project)).join('')}
+        ${visibleEdges.map(edge => renderGraphEdge(edge, visibleNodeById, project, isDrilled)).join('')}
+        ${visibleNodes.map(node => renderGraphNode(node, project, showRecords)).join('')}
       </g>
     </svg>
     <div class="graph-map-controls" aria-label="Graph map controls">
@@ -1123,12 +1144,17 @@ function renderMemoryGraphCanvas() {
       <button id="memoryGraphZoomIn" type="button" aria-label="Zoom in">+</button>
       <button id="memoryGraphReset" type="button">Reset</button>
     </div>
-    <div class="graph-readout"><strong>${escapeHtml(graph.layer)}</strong><span>${escapeHtml(graph.recordCount)} records · ${escapeHtml(nodes.filter(node => node.kind === 'concept').length)} ${isDrilled ? 'branch nodes' : 'top categories'} · zoom ${Math.round(zoom * 100)}%</span>${isDrilled ? '<button id="memoryGraphBack" type="button">Back To Overview</button>' : ''}</div>
+    <div class="graph-readout"><strong>${escapeHtml(graph.layer)}</strong><span>${escapeHtml(graph.recordCount)} records · ${escapeHtml(visibleNodes.filter(node => node.kind === 'concept').length)} ${isDrilled ? (showRecords ? 'record source view' : 'branch nodes') : 'top categories'} · zoom ${Math.round(zoom * 100)}%</span>${isDrilled ? '<button id="memoryGraphBack" type="button">Back To Overview</button>' : ''}</div>
   `;
   canvas.querySelectorAll('[data-graph-node]').forEach(element => {
     element.addEventListener('click', event => {
       event.preventDefault();
       event.stopPropagation();
+      if (element.dataset.graphKind === 'record' && state.memoryGraphFocusId) {
+        openGraphMemoryRecord(element.dataset.graphCollection || state.memoryGraphLayer, element.dataset.graphNode);
+        return;
+      }
+
       focusMemoryGraphNode(element.dataset.graphNode);
     });
     element.addEventListener('keydown', event => {
@@ -1157,24 +1183,40 @@ function renderMemoryGraphCanvas() {
   renderMemoryGraphInspector(nodes.find(node => node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId) ?? null);
 }
 
-function renderGraphEdge(edge, nodeById, project) {
+function renderGraphEdge(edge, nodeById, project, isDrilled = false) {
   const source = nodeById.get(edge.source);
   const target = nodeById.get(edge.target);
   if (!source || !target) return '';
   const start = project(source);
   const end = project(target);
-  return `<line class="graph-edge ${escapeHtml(edge.kind)}" x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke-width="${Math.max(0.45, edge.weight * 2.1).toFixed(2)}"></line>`;
+  const hasRelation = Boolean(source.metadata?.relation || source.metadata?.relatedTo || target.metadata?.relation || target.metadata?.relatedTo);
+  return `<line class="graph-edge ${escapeHtml(edge.kind)} ${hasRelation ? 'relation' : ''}" x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke-width="${Math.max(0.45, edge.weight * (edge.kind === 'mentions' ? 3.0 : 2.1)).toFixed(2)}"></line>`;
 }
 
-function renderGraphNode(node, project) {
+function renderGraphNode(node, project, isDrilled = false) {
   const point = project(node);
   const isConcept = node.kind === 'concept';
-  const radius = isConcept ? Math.min(42, 13 + node.weight * 2.6) : 5.5;
+  const isDrilledRecord = isDrilled && node.kind === 'record';
+  const radius = isConcept ? Math.min(42, 13 + node.weight * 2.6) : isDrilledRecord ? 7.5 : 5.5;
   const selected = node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId;
-  const hitRadius = Math.max(radius + 8, isConcept ? 24 : 16);
+  const hitRadius = Math.max(radius + 8, isConcept ? 24 : isDrilledRecord ? 18 : 16);
   const nodeKey = node.recordId ?? node.id;
+  const title = graphNodeTitle(node);
+
+  if (isDrilledRecord) {
+    const type = node.memoryType ?? 'record';
+    return `
+      <g class="graph-node related-record ${escapeHtml(type)} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(nodeKey)}" data-graph-kind="record" data-graph-collection="${escapeHtml(node.metadata?.layer ?? state.memoryGraphLayer)}" tabindex="0" role="button" aria-label="Open ${escapeHtml(node.label)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+        <title>${escapeHtml(title)}</title>
+        <circle class="graph-node-hit" r="${hitRadius.toFixed(1)}"></circle>
+        <circle r="${radius.toFixed(1)}" filter="url(#nodeGlow)"></circle>
+      </g>
+    `;
+  }
+
   return `
-    <g class="graph-node ${escapeHtml(node.kind)} ${escapeHtml(node.memoryType ?? '')} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(nodeKey)}" tabindex="0" role="button" aria-label="Inspect ${escapeHtml(node.label)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+    <g class="graph-node ${escapeHtml(node.kind)} ${escapeHtml(node.memoryType ?? '')} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(nodeKey)}" data-graph-kind="${escapeHtml(node.kind)}" data-graph-collection="${escapeHtml(node.metadata?.layer ?? state.memoryGraphLayer)}" tabindex="0" role="button" aria-label="Inspect ${escapeHtml(node.label)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+      <title>${escapeHtml(title)}</title>
       <circle class="graph-node-hit" r="${hitRadius.toFixed(1)}"></circle>
       <circle r="${radius.toFixed(1)}" filter="url(#nodeGlow)"></circle>
       ${isConcept ? `<text y="${(radius + 13).toFixed(1)}">${escapeHtml(truncateMiddle(node.label, 22))}</text>` : ''}
@@ -1182,18 +1224,38 @@ function renderGraphNode(node, project) {
   `;
 }
 
+function graphNodeTitle(node) {
+  const pieces = [
+    node.label,
+    node.memoryType,
+    node.provenance,
+    node.metadata?.memoryState,
+    node.observedAt ? new Date(node.observedAt).toLocaleString() : null,
+    node.textPreview
+  ].filter(Boolean);
+  return pieces.join('\n');
+}
+
 async function focusMemoryGraphNode(id) {
   const node = state.memoryGraph?.nodes?.find(item => item.id === id || item.recordId === id);
   const nextFocusId = node?.recordId ?? node?.id ?? id;
 
   if (state.memoryGraphFocusId && nextFocusId === state.memoryGraphFocusId) {
-    await resetMemoryGraphDrilldown();
+    if (node?.kind === 'concept' && state.memoryGraphDrillLevel === 1) {
+      state.memoryGraphDrillLevel = 2;
+      renderMemoryGraphCanvas();
+      await inspectMemoryGraphNode(node);
+      return;
+    }
+
     return;
   }
 
+  const previousWasFocused = Boolean(state.memoryGraphFocusId);
+
   state.memoryGraphFocusId = nextFocusId;
   state.memoryGraphFocusLabel = node?.label ?? null;
-  state.memoryGraphZoom = Math.max(state.memoryGraphZoom, node?.kind === 'concept' ? 1.34 : 1.12);
+  state.memoryGraphDrillLevel = node?.kind === 'concept' ? (previousWasFocused ? 2 : 1) : 2;
   renderMemoryGraphCanvas();
 
   if (!node) {
