@@ -64,7 +64,6 @@ public sealed class AgentRuntime(
 
         var messages = BuildInitialMessages(request, prompt);
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
-        var retriedRequiredSmartHomeTool = false;
         var retriedFreshnessBrowsing = false;
         var delegatedNewsDigestSynthesis = false;
         var pendingFreshBrowseUrls = new Queue<string>();
@@ -142,18 +141,6 @@ public sealed class AgentRuntime(
             if (toolCall is not null)
             {
                 toolCall = NormalizeToolCall(agent, toolCall, request.Message);
-            }
-
-            if (request.AllowTools
-                && toolCall is null
-                && !retriedRequiredSmartHomeTool
-                && !toolResults.Any(result => result.Tool.Equals("smart_home", StringComparison.OrdinalIgnoreCase))
-                && RequiresSmartHomeTool(agent, request.Message))
-            {
-                retriedRequiredSmartHomeTool = true;
-                reasoningSteps.Add(new ReasoningStep("tool_retry", "Retrying because a smart-home command requires smart_home tool execution.", DateTimeOffset.UtcNow));
-                messages = AppendRequiredSmartHomeToolInstruction(messages, request.Message);
-                continue;
             }
 
             if (request.AllowTools
@@ -608,15 +595,6 @@ Loop guardrails:
         ];
     }
 
-    private static IReadOnlyList<LocalChatMessage> AppendRequiredSmartHomeToolInstruction(
-        IReadOnlyList<LocalChatMessage> messages,
-        string originalMessage) =>
-        [
-            .. messages,
-            new LocalChatMessage("assistant", "I need to use the smart_home tool for this smart-home command."),
-            new LocalChatMessage("user", $"The previous response did not call a tool. For this request, emit exactly one smart_home JSON tool call now and no final answer: {originalMessage}")
-        ];
-
     private static IReadOnlyList<LocalChatMessage> AppendRequiredFreshBrowsingInstruction(
         IReadOnlyList<LocalChatMessage> messages,
         string originalMessage,
@@ -626,9 +604,6 @@ Loop guardrails:
             new LocalChatMessage("assistant", "I found remembered targets, but current information must be fetched before answering."),
             new LocalChatMessage("user", $"The previous response answered without browsing. For this request, use the remembered targets below and emit exactly one web_browse JSON tool call now; do not answer yet. Original request: {originalMessage}\n\nRemembered targets/context:\n{memoryResult}")
         ];
-
-    private static bool RequiresSmartHomeTool(AgentDefinition agent, string message) =>
-        IsToolAllowed(agent, "smart_home") && IsSmartHomeCommand(message);
 
     private static bool RequiresFreshBrowsing(string message)
     {
@@ -812,14 +787,6 @@ Browsed source bundle:
 
         var extension = value.Split('.').LastOrDefault()?.ToLowerInvariant();
         return extension is "cs" or "md" or "json" or "txt" or "xml" or "yaml" or "yml" or "js" or "ts" or "tsx" or "jsx" or "css" or "html" or "csproj" or "sln";
-    }
-
-    private static bool IsSmartHomeCommand(string message)
-    {
-        var lower = message.ToLowerInvariant();
-
-        return ContainsAny(lower, "tv", "light", "lights", "lamp", "lamps")
-            && ContainsAny(lower, "turn", "switch", "power", "mute", "unmute", " on", " off");
     }
 
     private static bool ContainsAny(string value, params string[] candidates) =>

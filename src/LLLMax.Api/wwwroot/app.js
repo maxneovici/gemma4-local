@@ -12,12 +12,7 @@ const state = {
   memoryStats: null,
   foundationProfile: null,
   selectedCollection: null,
-  collectionInspectCursor: null,
-  collectionInspectFilter: {},
   memoryProfile: null,
-  selectedProfileCategory: null,
-  selectedTenant: null,
-  selectedCategory: null,
   draftSession: null,
   visibleSessionCount: 12,
   messageTraces: new Map(),
@@ -32,8 +27,7 @@ const state = {
   editingAgent: null,
   inspectEvents: [],
   inspectCollapsed: true,
-  inspectDismissed: false,
-  memoryDashboardOpen: false
+  inspectDismissed: false
 };
 
 let knownJobStates = new Map();
@@ -202,7 +196,6 @@ function clearResponseDetails() {
   renderToolTraces([]);
   renderCitations([]);
   renderSteps([]);
-  document.querySelector('.response-details')?.removeAttribute('open');
 }
 
 function resetInspectPanel() {
@@ -725,7 +718,6 @@ async function loadMemoryStats() {
   `;
   renderFoundationProfile(foundationProfile, profile);
   renderMemoryDashboard(stats, profile);
-  renderMyProfile(profile);
   await loadMemoryCollections();
 }
 
@@ -735,14 +727,17 @@ function renderFoundationProfile(profile, memoryProfile) {
   $('profileUsername').value = profile?.username ?? '';
   $('profileEmail').value = profile?.email ?? '';
   $('profileFullName').value = profile?.fullName ?? '';
+  $('profileFamilyAndRelations').value = profile?.familyAndRelations ?? '';
+  $('profileWork').value = profile?.work ?? '';
+  $('profileLocation').value = profile?.location ?? '';
+  $('profileCommunicationStyle').value = profile?.communicationStyle ?? '';
+  $('profileInterests').value = profile?.interests ?? '';
+  $('profileGoals').value = profile?.goals ?? '';
+  $('profileConstraints').value = profile?.constraints ?? '';
   $('profileDetails').value = profile?.details ?? '';
   $('profileFacts').value = profile?.facts ?? '';
 
-  const updated = profile?.updatedAt ? new Date(profile.updatedAt).toLocaleString() : 'not saved yet';
-  const learnedFacts = memoryProfile?.factCount ?? 0;
-  $('myProfile').innerHTML = `
-    <div class="profile-summary"><strong>${escapeHtml(profile?.fullName || profile?.username || 'Foundation profile')}</strong><span>Saved ${escapeHtml(updated)} · ${escapeHtml(learnedFacts)} learned facts available</span></div>
-  `;
+  void memoryProfile;
 }
 
 async function saveFoundationProfile(event) {
@@ -754,6 +749,13 @@ async function saveFoundationProfile(event) {
         username: $('profileUsername').value,
         email: $('profileEmail').value,
         fullName: $('profileFullName').value,
+        familyAndRelations: $('profileFamilyAndRelations').value,
+        work: $('profileWork').value,
+        location: $('profileLocation').value,
+        communicationStyle: $('profileCommunicationStyle').value,
+        interests: $('profileInterests').value,
+        goals: $('profileGoals').value,
+        constraints: $('profileConstraints').value,
         details: $('profileDetails').value,
         facts: $('profileFacts').value
       })
@@ -774,32 +776,12 @@ function closeProfileModal() {
   $('profileModal').hidden = true;
 }
 
-function renderMyProfile(profile) {
-  if (!$('myProfile')) return;
-  renderFoundationProfile(state.foundationProfile, profile);
-}
-
 function renderMemoryDashboard(stats, profile) {
-  if (!$('memoryDashboard')) return;
-
   const reflected = profile?.reflectedAt ? new Date(profile.reflectedAt).toLocaleString() : 'not reflected yet';
   const topCollections = [...(stats?.collections ?? [])]
     .sort((left, right) => (right.recordCount ?? 0) - (left.recordCount ?? 0))
     .slice(0, 8);
   const categories = (profile?.categories ?? []).slice(0, 10);
-  const compact = `
-    <div class="quality-head">
-      <span><strong>Memory graph</strong><small>${escapeHtml(stats?.recordCount ?? 0)} records · ${escapeHtml(stats?.collectionCount ?? 0)} collections · profile reflected ${escapeHtml(reflected)}</small></span>
-    </div>
-    <div class="memory-map" aria-label="Memory graph preview">
-      ${topCollections.map(collection => `<span style="--size:${Math.max(0.35, Math.min(1, (collection.recordCount ?? 0) / Math.max(1, stats?.recordCount ?? 1))) * 100}%"><b>${escapeHtml(humanizeCollectionName(collection.name))}</b><small>${escapeHtml(collection.recordCount ?? 0)}</small></span>`).join('') || '<p class="muted">No memory collections yet.</p>'}
-    </div>
-    <div class="quality-categories">
-      ${categories.map(category => `<span>${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</span>`).join('') || '<span>no categories yet</span>'}
-    </div>
-    <p class="muted">Dashboard scope is all memory. Profile facts are one layer of the graph, not the whole dashboard.</p>
-  `;
-  $('memoryDashboard').innerHTML = compact;
   renderMemoryDashboardStage(stats, profile, reflected, topCollections, categories);
 }
 
@@ -836,14 +818,44 @@ function renderMemoryDashboardStage(stats, profile, reflected, topCollections, c
 }
 
 function openMemoryDashboard() {
-  state.memoryDashboardOpen = true;
+  closeOperationsStage();
   $('memoryDashboardStage').hidden = false;
   renderMemoryDashboard(state.memoryStats, state.memoryProfile);
 }
 
 function closeMemoryDashboard() {
-  state.memoryDashboardOpen = false;
   $('memoryDashboardStage').hidden = true;
+}
+
+const operationPanels = {
+  runtime: ['Runtime', 'Core process, model, and session health.'],
+  jobs: ['Background Jobs', 'Queued and running local work.'],
+  documents: ['Documents', 'Upload, OCR, and invoice extraction.'],
+  mcp: ['MCP Bridge', 'Local MCP tool registration and approvals.'],
+  api: ['API Discovery', 'Local API introspection helpers.'],
+  memory: ['Memory Actions', 'Manual memory writes and reflection.'],
+  details: ['Conversation Details', 'Trace, metrics, citations, and reasoning for the selected response.'],
+  help: ['Help', 'Short guide to the control surfaces.']
+};
+
+function openOperationsStage(panel) {
+  closeMemoryDashboard();
+  const [title, subtitle] = operationPanels[panel] ?? operationPanels.runtime;
+  $('operationsEyebrow').textContent = 'Operations';
+  $('operationsTitle').textContent = title;
+  $('operationsSubtitle').textContent = subtitle;
+  document.querySelectorAll('.operations-panel').forEach(element => {
+    element.hidden = element.id !== `operations${capitalize(panel)}Panel`;
+  });
+  $('operationsStage').hidden = false;
+}
+
+function closeOperationsStage() {
+  $('operationsStage').hidden = true;
+}
+
+function capitalize(value) {
+  return value ? value[0].toUpperCase() + value.slice(1) : value;
 }
 
 async function loadMemoryCollections() {
@@ -1782,6 +1794,10 @@ $('profileModal').addEventListener('click', event => {
 });
 $('openMemoryDashboard').addEventListener('click', openMemoryDashboard);
 $('closeMemoryDashboard').addEventListener('click', closeMemoryDashboard);
+document.querySelectorAll('[data-open-operations]').forEach(button => {
+  button.addEventListener('click', () => openOperationsStage(button.dataset.openOperations));
+});
+$('closeOperationsStage').addEventListener('click', closeOperationsStage);
 $('addMemory').addEventListener('click', addMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
 $('reflectMemory').addEventListener('click', reflectMemory);

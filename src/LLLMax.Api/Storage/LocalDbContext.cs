@@ -66,6 +66,13 @@ public sealed class LocalDbContext(DbContextOptions<LocalDbContext> options) : D
             entity.Property(profile => profile.Username).IsRequired();
             entity.Property(profile => profile.Email).IsRequired();
             entity.Property(profile => profile.FullName).IsRequired();
+            entity.Property(profile => profile.FamilyAndRelations).IsRequired();
+            entity.Property(profile => profile.Work).IsRequired();
+            entity.Property(profile => profile.Location).IsRequired();
+            entity.Property(profile => profile.CommunicationStyle).IsRequired();
+            entity.Property(profile => profile.Interests).IsRequired();
+            entity.Property(profile => profile.Goals).IsRequired();
+            entity.Property(profile => profile.Constraints).IsRequired();
             entity.Property(profile => profile.Details).IsRequired();
             entity.Property(profile => profile.Facts).IsRequired();
         });

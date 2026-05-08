@@ -33,6 +33,13 @@ public sealed class EfFoundationUserProfileStore(IDbContextFactory<LocalDbContex
         entity.Username = profile.Username.Trim();
         entity.Email = profile.Email.Trim();
         entity.FullName = profile.FullName.Trim();
+        entity.FamilyAndRelations = profile.FamilyAndRelations.Trim();
+        entity.Work = profile.Work.Trim();
+        entity.Location = profile.Location.Trim();
+        entity.CommunicationStyle = profile.CommunicationStyle.Trim();
+        entity.Interests = profile.Interests.Trim();
+        entity.Goals = profile.Goals.Trim();
+        entity.Constraints = profile.Constraints.Trim();
         entity.Details = profile.Details.Trim();
         entity.Facts = profile.Facts.Trim();
         entity.UpdatedAt = now;
@@ -42,5 +49,18 @@ public sealed class EfFoundationUserProfileStore(IDbContextFactory<LocalDbContex
     }
 
     private static FoundationUserProfile ToModel(UserProfileEntity entity) =>
-        new(entity.Username, entity.Email, entity.FullName, entity.Details, entity.Facts, entity.UpdatedAt);
+        new(
+            entity.Username,
+            entity.Email,
+            entity.FullName,
+            entity.FamilyAndRelations,
+            entity.Work,
+            entity.Location,
+            entity.CommunicationStyle,
+            entity.Interests,
+            entity.Goals,
+            entity.Constraints,
+            entity.Details,
+            entity.Facts,
+            entity.UpdatedAt);
 }
