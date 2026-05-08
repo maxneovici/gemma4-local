@@ -68,13 +68,15 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
         return bands
             .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderBy(item => item.Priority).ThenByDescending(item => item.Result.Score).First())
-            .OrderBy(item => item.Priority)
-            .ThenByDescending(item => item.Result.Score)
+            .Select(group => group.OrderByDescending(RankDefaultMemoryResult).First())
+            .OrderByDescending(RankDefaultMemoryResult)
             .Select(item => item.Result)
             .Take(limit)
             .ToList();
     }
+
+    private static double RankDefaultMemoryResult((MemorySearchResult Result, int Priority) item) =>
+        item.Result.Score + (item.Priority < 0 ? 0.05 : 0) - (Math.Max(item.Priority, 0) * 0.05);
 
     private async Task AddBandAsync(
         ICollection<(MemorySearchResult Result, int Priority)> bands,

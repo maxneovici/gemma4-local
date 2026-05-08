@@ -18,7 +18,7 @@ fi
 ASPNETCORE_URLS="http://localhost:$PORT" \
 LocalAi__ManageProcess=false \
 LocalAi__DefaultModel="$MODEL" \
-dotnet run --project "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" --no-build > "$LOG" 2>&1 &
+dotnet run --project "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" > "$LOG" 2>&1 &
 
 echo "LLLMax started on http://localhost:$PORT using $MODEL"
 echo "Logs: $LOG"
