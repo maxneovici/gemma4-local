@@ -9,6 +9,8 @@ const state = {
   taskGraph: null,
   backgroundJobs: [],
   memoryCollections: [],
+  memoryStats: null,
+  foundationProfile: null,
   selectedCollection: null,
   collectionInspectCursor: null,
   collectionInspectFilter: {},
@@ -30,7 +32,8 @@ const state = {
   editingAgent: null,
   inspectEvents: [],
   inspectCollapsed: true,
-  inspectDismissed: false
+  inspectDismissed: false,
+  memoryDashboardOpen: false
 };
 
 let knownJobStates = new Map();
@@ -710,67 +713,137 @@ function formatSessionDate(value) {
 
 async function loadMemoryStats() {
   const stats = await api('/memory/stats');
+  const foundationProfile = await api('/user-profile/');
   const profile = await api('/memory/profile');
+  state.memoryStats = stats;
+  state.foundationProfile = foundationProfile;
   state.memoryProfile = profile;
   $('memoryStats').innerHTML = `
-    <button id="openQdrantBrowser" class="runtime-pill qdrant-button" type="button"><span>browse vector memory</span><strong>${escapeHtml(stats.provider)}</strong></button>
+    <div class="runtime-pill"><span>provider</span><strong>${escapeHtml(stats.provider)}</strong></div>
     <div class="runtime-pill"><span>collections</span><strong>${stats.collectionCount}</strong></div>
     <div class="runtime-pill"><span>records</span><strong>${stats.recordCount}</strong></div>
   `;
-  renderMemoryQuality(profile);
+  renderFoundationProfile(foundationProfile, profile);
+  renderMemoryDashboard(stats, profile);
   renderMyProfile(profile);
-  $('openQdrantBrowser').addEventListener('click', openQdrantBrowser);
   await loadMemoryCollections();
+}
+
+function renderFoundationProfile(profile, memoryProfile) {
+  if (!$('foundationProfileForm')) return;
+
+  $('profileUsername').value = profile?.username ?? '';
+  $('profileEmail').value = profile?.email ?? '';
+  $('profileFullName').value = profile?.fullName ?? '';
+  $('profileDetails').value = profile?.details ?? '';
+  $('profileFacts').value = profile?.facts ?? '';
+
+  const updated = profile?.updatedAt ? new Date(profile.updatedAt).toLocaleString() : 'not saved yet';
+  const learnedFacts = memoryProfile?.factCount ?? 0;
+  $('myProfile').innerHTML = `
+    <div class="profile-summary"><strong>${escapeHtml(profile?.fullName || profile?.username || 'Foundation profile')}</strong><span>Saved ${escapeHtml(updated)} · ${escapeHtml(learnedFacts)} learned facts available</span></div>
+  `;
+}
+
+async function saveFoundationProfile(event) {
+  event.preventDefault();
+  await guarded(async () => {
+    const saved = await api('/user-profile/', {
+      method: 'PUT',
+      body: JSON.stringify({
+        username: $('profileUsername').value,
+        email: $('profileEmail').value,
+        fullName: $('profileFullName').value,
+        details: $('profileDetails').value,
+        facts: $('profileFacts').value
+      })
+    });
+    state.foundationProfile = saved;
+    renderFoundationProfile(saved, state.memoryProfile);
+    closeProfileModal();
+  }, 'Saving profile...', { overlay: false });
+}
+
+function openProfileModal() {
+  renderFoundationProfile(state.foundationProfile, state.memoryProfile);
+  $('profileModal').hidden = false;
+  $('profileFullName').focus();
+}
+
+function closeProfileModal() {
+  $('profileModal').hidden = true;
 }
 
 function renderMyProfile(profile) {
   if (!$('myProfile')) return;
-
-  const facts = profile?.facts ?? [];
-  const categories = profile?.categories ?? [];
-  const selectedCategoryExists = categories.some(category => category.name === state.selectedProfileCategory);
-  const selectedCategory = selectedCategoryExists ? state.selectedProfileCategory : categories[0]?.name ?? null;
-  state.selectedProfileCategory = selectedCategory;
-  const visibleFacts = selectedCategory
-    ? facts.filter(fact => fact.category === selectedCategory)
-    : facts;
-  const reflected = profile?.reflectedAt ? new Date(profile.reflectedAt).toLocaleString() : 'not reflected yet';
-  $('myProfile').innerHTML = `
-    <div class="profile-summary"><strong>${escapeHtml(profile?.summary ?? 'No canonical profile yet.')}</strong><span>${escapeHtml(reflected)}</span></div>
-    <div class="quality-categories">
-      ${categories.slice(0, 12).map(category => `<button class="profile-category ${category.name === selectedCategory ? 'active' : ''}" data-profile-category="${escapeHtml(category.name)}" type="button">${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</button>`).join('') || '<span>no categories yet</span>'}
-    </div>
-    ${selectedCategory ? `<div class="profile-category-title"><strong>${escapeHtml(selectedCategory)}</strong><span>${escapeHtml(visibleFacts.length)} fact${visibleFacts.length === 1 ? '' : 's'}</span></div>` : ''}
-    <div class="profile-facts">
-      ${visibleFacts.slice(0, 12).map(fact => `<article><strong>${escapeHtml(fact.topic || fact.category)}</strong><p>${escapeHtml(fact.text)}</p></article>`).join('') || '<p class="muted">No facts in this category yet.</p>'}
-    </div>
-  `;
-
-  document.querySelectorAll('[data-profile-category]').forEach(button => {
-    button.addEventListener('click', () => {
-      state.selectedProfileCategory = button.dataset.profileCategory;
-      renderMyProfile(state.memoryProfile);
-    });
-  });
+  renderFoundationProfile(state.foundationProfile, profile);
 }
 
-function renderMemoryQuality(profile) {
-  if (!$('memoryQuality')) return;
+function renderMemoryDashboard(stats, profile) {
+  if (!$('memoryDashboard')) return;
 
   const reflected = profile?.reflectedAt ? new Date(profile.reflectedAt).toLocaleString() : 'not reflected yet';
-  const topFacts = (profile?.facts ?? []).slice(0, 4);
-  const categories = (profile?.categories ?? []).slice(0, 6);
-  $('memoryQuality').innerHTML = `
+  const topCollections = [...(stats?.collections ?? [])]
+    .sort((left, right) => (right.recordCount ?? 0) - (left.recordCount ?? 0))
+    .slice(0, 8);
+  const categories = (profile?.categories ?? []).slice(0, 10);
+  const compact = `
     <div class="quality-head">
-      <span><strong>Canonical profile</strong><small>${escapeHtml(profile?.factCount ?? 0)} facts · ${escapeHtml(profile?.categoryCount ?? 0)} schema categories · ${escapeHtml(reflected)}</small></span>
+      <span><strong>Memory graph</strong><small>${escapeHtml(stats?.recordCount ?? 0)} records · ${escapeHtml(stats?.collectionCount ?? 0)} collections · profile reflected ${escapeHtml(reflected)}</small></span>
+    </div>
+    <div class="memory-map" aria-label="Memory graph preview">
+      ${topCollections.map(collection => `<span style="--size:${Math.max(0.35, Math.min(1, (collection.recordCount ?? 0) / Math.max(1, stats?.recordCount ?? 1))) * 100}%"><b>${escapeHtml(humanizeCollectionName(collection.name))}</b><small>${escapeHtml(collection.recordCount ?? 0)}</small></span>`).join('') || '<p class="muted">No memory collections yet.</p>'}
     </div>
     <div class="quality-categories">
       ${categories.map(category => `<span>${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</span>`).join('') || '<span>no categories yet</span>'}
     </div>
-    <div class="quality-facts">
-      ${topFacts.map(fact => `<p>${escapeHtml(fact.text)}</p>`).join('') || '<p class="muted">Run memory reflection to build a compact canonical profile.</p>'}
-    </div>
+    <p class="muted">Dashboard scope is all memory. Profile facts are one layer of the graph, not the whole dashboard.</p>
   `;
+  $('memoryDashboard').innerHTML = compact;
+  renderMemoryDashboardStage(stats, profile, reflected, topCollections, categories);
+}
+
+function renderMemoryDashboardStage(stats, profile, reflected, topCollections, categories) {
+  if (!$('memoryDashboardMain')) return;
+
+  const facts = profile?.facts ?? [];
+  const totalRecords = Math.max(1, stats?.recordCount ?? 1);
+  $('memoryDashboardMain').innerHTML = `
+    <section class="dashboard-hero">
+      <div><span>Total Records</span><strong>${escapeHtml(stats?.recordCount ?? 0)}</strong></div>
+      <div><span>Collections</span><strong>${escapeHtml(stats?.collectionCount ?? 0)}</strong></div>
+      <div><span>Canonical Facts</span><strong>${escapeHtml(profile?.factCount ?? 0)}</strong></div>
+      <div><span>Last Reflection</span><strong>${escapeHtml(reflected)}</strong></div>
+    </section>
+    <section class="dashboard-graph-canvas">
+      ${topCollections.map((collection, index) => `<article class="dashboard-node node-${index % 6}" style="--weight:${Math.max(0.18, Math.min(1, (collection.recordCount ?? 0) / totalRecords))}"><strong>${escapeHtml(humanizeCollectionName(collection.name))}</strong><span>${escapeHtml(collection.recordCount ?? 0)} records</span></article>`).join('') || '<p class="muted">No memory collections yet.</p>'}
+    </section>
+    <section class="dashboard-grid">
+      <article>
+        <h3>Collection Weights</h3>
+        ${(stats?.collections ?? []).slice(0, 12).map(collection => `<p><span>${escapeHtml(humanizeCollectionName(collection.name))}</span><b>${escapeHtml(collection.recordCount ?? 0)}</b></p>`).join('') || '<p class="muted">No collections.</p>'}
+      </article>
+      <article>
+        <h3>Profile Categories</h3>
+        <div class="quality-categories">${categories.map(category => `<span>${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</span>`).join('') || '<span>no categories yet</span>'}</div>
+      </article>
+      <article class="wide">
+        <h3>Recent Canonical Profile Layer</h3>
+        ${facts.slice(0, 6).map(fact => `<p><span>${escapeHtml(fact.category || 'profile')}</span><b>${escapeHtml(fact.text)}</b></p>`).join('') || '<p class="muted">Run reflection to populate profile facts.</p>'}
+      </article>
+    </section>
+  `;
+}
+
+function openMemoryDashboard() {
+  state.memoryDashboardOpen = true;
+  $('memoryDashboardStage').hidden = false;
+  renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+}
+
+function closeMemoryDashboard() {
+  state.memoryDashboardOpen = false;
+  $('memoryDashboardStage').hidden = true;
 }
 
 async function loadMemoryCollections() {
@@ -782,167 +855,12 @@ async function loadMemoryCollections() {
   $('memoryCollectionSelect').innerHTML = state.memoryCollections.map(collection => `
     <option value="${escapeHtml(collection.name)}" ${collection.name === selected ? 'selected' : ''}>${escapeHtml(humanizeCollectionName(collection.name))} (${escapeHtml(collection.recordCount)} memories)</option>
   `).join('') || '<option value="coordinator">coordinator</option>';
-  renderQdrantCollectionTable();
-}
-
-function renderQdrantCollectionTable() {
-  if (!$('qdrantCollectionTable')) return;
-
-  $('qdrantCollectionTable').innerHTML = state.memoryCollections.length ? `
-    <table class="collection-table">
-      <thead><tr><th>Name</th><th>Records</th><th>Vector</th><th>Status</th><th>Actions</th></tr></thead>
-      <tbody>
-        ${state.memoryCollections.map(collection => `
-          <tr>
-            <td><strong>${escapeHtml(humanizeCollectionName(collection.name))}</strong><span>${escapeHtml(collection.name)}</span></td>
-            <td>${escapeHtml(collection.recordCount)}</td>
-            <td>${collection.vectorSize ? `${escapeHtml(collection.vectorSize)}d` : '-'}${collection.distance ? ` · ${escapeHtml(collection.distance)}` : ''}</td>
-            <td>${escapeHtml(collection.status ?? collection.provider ?? '-')}</td>
-            <td><div class="table-actions"><button data-collection-detail="${escapeHtml(collection.name)}" type="button">Details</button><button data-browse-collection="${escapeHtml(collection.name)}" type="button">Browse</button><button data-delete-collection="${escapeHtml(collection.name)}" type="button">Delete</button></div></td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-  ` : '<p class="muted">No memory collections yet.</p>';
-
-  document.querySelectorAll('[data-collection-detail]').forEach(button => {
-    button.addEventListener('click', () => showCollectionDetail(button.dataset.collectionDetail));
-  });
-  document.querySelectorAll('[data-browse-collection]').forEach(button => {
-    button.addEventListener('click', () => browseCollection(button.dataset.browseCollection));
-  });
-  document.querySelectorAll('[data-delete-collection]').forEach(button => {
-    button.addEventListener('click', () => deleteCollection(button.dataset.deleteCollection));
-  });
 }
 
 function humanizeCollectionName(name) {
   return name
     .replace(/[_-]+/g, ' ')
     .replace(/\b\w/g, character => character.toUpperCase());
-}
-
-async function showCollectionDetail(name) {
-  const detail = await api(`/memory/collections/${encodeURIComponent(name)}`);
-  $('collectionInspector').innerHTML = `
-    <div class="inspector-head">
-      <div><strong>${escapeHtml(humanizeCollectionName(detail.name))}</strong><span>${escapeHtml(detail.name)}</span></div>
-    </div>
-    <div class="detail-grid">
-      <div><span>provider</span><strong>${escapeHtml(detail.provider)}</strong></div>
-      <div><span>records</span><strong>${escapeHtml(detail.recordCount)}</strong></div>
-      <div><span>status</span><strong>${escapeHtml(detail.status ?? '-')}</strong></div>
-      <div><span>vector</span><strong>${detail.vectorSize ? `${escapeHtml(detail.vectorSize)}d` : '-'}${detail.distance ? ` · ${escapeHtml(detail.distance)}` : ''}</strong></div>
-    </div>
-  `;
-}
-
-async function browseCollection(name) {
-  await guarded(async () => {
-    state.selectedCollection = name;
-    state.selectedTenant = null;
-    state.selectedCategory = null;
-    state.collectionInspectCursor = null;
-    state.collectionInspectFilter = {};
-    const groups = await api(`/memory/collections/${encodeURIComponent(name)}/groups`);
-    renderCollectionTree(groups);
-  }, `Browsing ${name}...`, { overlay: false });
-}
-
-function renderCollectionTree(groups) {
-  $('collectionInspector').innerHTML = `
-    <div class="inspector-head">
-      <div>
-        <strong>${escapeHtml(humanizeCollectionName(groups.collection))}</strong>
-        <span>${escapeHtml(groups.sampledRecords)} sampled records grouped by tenant and category</span>
-      </div>
-    </div>
-    <div class="collection-tree">
-      ${(groups.tenants ?? []).map(tenant => `
-        <details open>
-          <summary>${escapeHtml(tenant.tenant)} <span>${escapeHtml(tenant.count)} records</span></summary>
-          <div class="tree-children">
-            ${(tenant.categories ?? []).map(category => `
-              <button data-tree-filter="${escapeHtml(groups.collection)}|${escapeHtml(tenant.tenant)}|${escapeHtml(category.category)}" type="button">
-                ${escapeHtml(category.category)} <span>${escapeHtml(category.count)}</span>
-              </button>
-            `).join('')}
-          </div>
-        </details>
-      `).join('') || '<p class="muted">No tenant/category metadata found in the sampled records.</p>'}
-    </div>
-    <div id="collectionRecordPane" class="collection-record-pane"><p class="muted">Select a tenant/category to preview records.</p></div>
-  `;
-
-  document.querySelectorAll('[data-tree-filter]').forEach(button => {
-    button.addEventListener('click', () => {
-      const [collection, tenant, category] = button.dataset.treeFilter.split('|');
-      inspectCollection(collection, { tenant, category });
-    });
-  });
-}
-
-async function inspectCollection(name, options = {}) {
-  await guarded(async () => {
-    if (options.reset !== false) {
-      state.collectionInspectCursor = null;
-    }
-
-    state.selectedCollection = name;
-    $('memoryCollectionSelect').value = name;
-    state.selectedTenant = options.tenant ?? state.selectedTenant;
-    state.selectedCategory = options.category ?? state.selectedCategory;
-    const filter = {
-      ...(state.selectedTenant && state.selectedTenant !== 'unscoped' ? { tenant: state.selectedTenant } : {}),
-      ...(state.selectedCategory && state.selectedCategory !== 'uncategorized' ? { category: state.selectedCategory } : {})
-    };
-    state.collectionInspectFilter = filter;
-    const result = await api(`/memory/collections/${encodeURIComponent(name)}/inspect`, {
-      method: 'POST',
-      body: JSON.stringify({ limit: 12, cursor: options.cursor ?? state.collectionInspectCursor, filter })
-    });
-
-    state.collectionInspectCursor = result.nextCursor;
-    renderCollectionInspector(result, options.append === true);
-  }, `Inspecting ${name}...`, { overlay: false });
-}
-
-function renderCollectionInspector(result, append = false) {
-  const target = $('collectionRecordPane') ?? $('collectionInspector');
-  const existing = append ? $('collectionRecords')?.innerHTML ?? '' : '';
-  target.innerHTML = `
-    <div class="record-pane-head">
-      <div>
-        <strong>${escapeHtml(state.selectedTenant ?? 'All tenants')} / ${escapeHtml(state.selectedCategory ?? 'All categories')}</strong>
-        <span>${escapeHtml(result.count)} matching records · vectors hidden</span>
-      </div>
-    </div>
-    <div id="collectionRecords" class="collection-records">
-      ${existing}${renderCollectionRecords(result.records)}
-    </div>
-    ${result.nextCursor ? '<button id="loadMoreCollectionRecords" type="button">Load more</button>' : ''}
-  `;
-
-  $('loadMoreCollectionRecords')?.addEventListener('click', () => inspectCollection(result.collection, { reset: false, append: true, cursor: result.nextCursor }));
-  bindMemoryRecordActions(target);
-}
-
-function renderCollectionRecords(records) {
-  return records.map(record => {
-    const metadata = renderMetadata(record.metadata ?? {});
-    return `
-      <article class="collection-record" data-memory-record="${escapeHtml(record.id)}" data-memory-collection="${escapeHtml(state.selectedCollection ?? '')}">
-        <div class="record-head"><code>${escapeHtml(record.id.slice(0, 12))}</code><span>${escapeHtml(record.textLength)} chars</span></div>
-        <p>${escapeHtml(record.textPreview || '(empty text)')}</p>
-        <div class="metadata-row">${metadata || '<span>no metadata</span>'}</div>
-        <div class="memory-record-actions">
-          <button data-view-memory="${escapeHtml(record.id)}" type="button">View</button>
-          <button data-edit-memory="${escapeHtml(record.id)}" type="button">Edit</button>
-          <button data-delete-memory="${escapeHtml(record.id)}" type="button">Delete</button>
-        </div>
-      </article>
-    `;
-  }).join('') || '<p class="muted">No records matched this filter.</p>';
 }
 
 function bindMemoryRecordActions(root = document) {
@@ -982,23 +900,6 @@ function parseMetadataFilter(input) {
 
 function formatMetadataFilter(filter) {
   return Object.entries(filter ?? {}).map(([key, value]) => `${key}=${value}`).join(' ');
-}
-
-async function openQdrantBrowser() {
-  $('qdrantModal').hidden = false;
-  await guarded(async () => {
-    await loadMemoryCollections();
-    if (state.memoryCollections.some(collection => collection.name === state.selectedCollection)) {
-      await browseCollection(state.selectedCollection);
-    }
-  }, 'Opening Qdrant browser...', { overlay: false });
-}
-
-function closeQdrantBrowser() {
-  $('qdrantModal').hidden = true;
-  $('collectionInspector').innerHTML = '';
-  state.selectedTenant = null;
-  state.selectedCategory = null;
 }
 
 async function deleteCollection(name) {
@@ -1735,20 +1636,6 @@ async function discoverApi() {
   }, 'Discovering API...');
 }
 
-async function searchMemory() {
-  await guarded(async () => {
-    const query = $('memoryQuery').value.trim();
-    if (!query) return;
-    const collection = $('memoryCollectionSelect').value || 'coordinator';
-    state.selectedCollection = collection;
-    const result = await api('/memory/search', {
-      method: 'POST',
-      body: JSON.stringify({ collection, query, limit: 8 })
-    });
-    renderMemorySearchResults(collection, query, result);
-  }, 'Searching memory...');
-}
-
 async function addMemory() {
   await guarded(async () => {
     const collection = $('memoryCollectionSelect').value || 'coordinator';
@@ -1763,7 +1650,7 @@ async function addMemory() {
     $('memoryText').value = '';
     $('memoryMetadata').value = '';
     await loadMemoryStats();
-    await browseCollection(collection);
+    $('memoryResults').textContent = `Saved memory in ${collection}.`;
   }, 'Saving memory...');
 }
 
@@ -1886,15 +1773,18 @@ $('uploadDocument').addEventListener('click', uploadDocument);
 $('runOcr').addEventListener('click', () => runDocumentAction('/documents/ocr'));
 $('extractInvoice').addEventListener('click', () => runDocumentAction('/documents/extract-invoice'));
 $('discoverApi').addEventListener('click', discoverApi);
-$('searchMemory').addEventListener('click', searchMemory);
+$('foundationProfileForm').addEventListener('submit', saveFoundationProfile);
+$('openProfileModal').addEventListener('click', openProfileModal);
+$('closeProfileModal').addEventListener('click', closeProfileModal);
+$('cancelProfileModal').addEventListener('click', closeProfileModal);
+$('profileModal').addEventListener('click', event => {
+  if (event.target.id === 'profileModal') closeProfileModal();
+});
+$('openMemoryDashboard').addEventListener('click', openMemoryDashboard);
+$('closeMemoryDashboard').addEventListener('click', closeMemoryDashboard);
 $('addMemory').addEventListener('click', addMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
 $('reflectMemory').addEventListener('click', reflectMemory);
-$('reflectProfile').addEventListener('click', reflectMemory);
-$('closeQdrantBrowser').addEventListener('click', closeQdrantBrowser);
-$('qdrantModal').addEventListener('click', event => {
-  if (event.target.id === 'qdrantModal') closeQdrantBrowser();
-});
 $('registerMcp').addEventListener('click', registerMcp);
 $('saveAgentPrompt').addEventListener('click', saveAgentPrompt);
 $('resetAgentPrompt').addEventListener('click', resetAgentPrompt);
@@ -1913,7 +1803,11 @@ clearResponseDetails();
 await guarded(async () => {
   await Promise.all([loadModels(), loadAgents(), loadTools(), loadSkills(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
-  await newSession();
+  if (state.sessions.length > 0) {
+    await openSession(state.sessions[0].id);
+  } else {
+    await newSession();
+  }
 }, 'Bootstrapping local runtime...');
 
 setInterval(() => {

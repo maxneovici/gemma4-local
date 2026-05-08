@@ -5,20 +5,38 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${LLLMAX_PORT:-5220}"
 LOG="${LLLMAX_LOG:-$ROOT/data/lllmax.log}"
 MODEL="${LLLMAX_MODEL:-gemma4:31b}"
+URL="http://localhost:$PORT"
 
 mkdir -p "$(dirname "$LOG")"
+rm -rf "$ROOT/src/LLLMax.Api/bin" "$ROOT/src/LLLMax.Api/obj"
 
 if command -v lsof >/dev/null 2>&1; then
   pids="$(lsof -tiTCP:"$PORT" -sTCP:LISTEN || true)"
   if [[ -n "$pids" ]]; then
     kill $pids || true
+    sleep 1
   fi
 fi
 
-ASPNETCORE_URLS="http://localhost:$PORT" \
+dotnet build "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" >/dev/null
+
+ASPNETCORE_URLS="$URL" \
 LocalAi__ManageProcess=false \
 LocalAi__DefaultModel="$MODEL" \
-dotnet run --project "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" > "$LOG" 2>&1 &
+dotnet run --project "$ROOT/src/LLLMax.Api/LLLMax.Api.csproj" --no-build > "$LOG" 2>&1 &
+pid=$!
 
-echo "LLLMax started on http://localhost:$PORT using $MODEL"
+for _ in {1..40}; do
+  if curl -fsS "$URL/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    echo "LLLMax failed to start. Logs: $LOG" >&2
+    exit 1
+  fi
+  sleep 0.5
+done
+
+echo "LLLMax started on $URL using $MODEL"
+echo "If the browser looks stale, run: localStorage.clear(); navigator.serviceWorker?.getRegistrations().then(r=>r.forEach(x=>x.unregister())); location.reload();"
 echo "Logs: $LOG"

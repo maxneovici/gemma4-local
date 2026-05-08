@@ -7,6 +7,7 @@ using LLLMax.Api.Options;
 using LLLMax.Api.Services;
 using LLLMax.Api.Skills;
 using LLLMax.Api.Tools;
+using LLLMax.Api.UserProfile;
 using Microsoft.Extensions.Options;
 
 namespace LLLMax.Api.Agents;
@@ -19,6 +20,7 @@ public sealed class AgentRuntime(
     ILocalMemoryStore memoryStore,
     IRuntimeModelSettings runtimeModels,
     ISkillRegistry skillRegistry,
+    IFoundationUserProfileStore foundationProfile,
     IOptions<LocalAiOptions> options) : IAgentRuntime
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -44,11 +46,15 @@ public sealed class AgentRuntime(
         }
 
         var memoryContext = await BuildMemoryContextAsync(agent, request.Message, RequiresFreshBrowsing(request.Message), cancellationToken);
+        var foundationProfileContext = FoundationUserProfileFormatter.FormatForPrompt(await foundationProfile.GetAsync(cancellationToken));
+        var personalContext = string.IsNullOrWhiteSpace(foundationProfileContext)
+            ? memoryContext
+            : $"{foundationProfileContext}{Environment.NewLine}{Environment.NewLine}{memoryContext}";
         var toolContext = BuildToolContext(agent, request.AllowTools);
         var subagentContext = BuildSubagentContext(agent);
         var skillContext = BuildSkillContext(agent, request.Message);
         var route = ResolveRoute(agent, request);
-        var prompt = BuildSystemPrompt(agent, skillContext, memoryContext, toolContext, subagentContext);
+        var prompt = BuildSystemPrompt(agent, skillContext, personalContext, toolContext, subagentContext);
         var allowedTools = GetAllowedTools(agent, request.AllowTools);
 
         reasoningSteps.Add(new ReasoningStep("route", $"Model={route.Model}; reasoning={route.ReasoningEffort}; tools={request.AllowTools}; delegationDepth={delegationDepth}", DateTimeOffset.UtcNow));

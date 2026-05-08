@@ -8,6 +8,7 @@ using LLLMax.Api.Models;
 using LLLMax.Api.Options;
 using LLLMax.Api.Services;
 using LLLMax.Api.Tasks;
+using LLLMax.Api.UserProfile;
 using Microsoft.Extensions.Options;
 
 namespace LLLMax.Api.Sessions;
@@ -20,6 +21,7 @@ public sealed class AssistantOrchestrator(
     IAgentRegistry agentRegistry,
     IBackgroundJobService backgroundJobs,
     IRuntimeModelSettings runtimeModels,
+    IFoundationUserProfileStore foundationProfile,
     IOptions<LocalAiOptions> options) : IAssistantOrchestrator
 {
     private readonly LocalAiOptions _options = options.Value;
@@ -78,7 +80,7 @@ public sealed class AssistantOrchestrator(
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
-        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
+        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, nextMessages, cancellationToken);
 
         return new SessionChatResponse(
             SessionId: session.Id,
@@ -176,7 +178,7 @@ public sealed class AssistantOrchestrator(
                     UpdatedAt = DateTimeOffset.UtcNow,
                     Messages = nextMessages
                 }, cancellationToken);
-                await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
+                await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, nextMessages, cancellationToken);
 
                 if (graph is not null)
                 {
@@ -221,7 +223,7 @@ public sealed class AssistantOrchestrator(
         }
 
         var agent = agentRegistry.GetRequiredAgent(request.Agent ?? session.Agent);
-        var streamMessages = BuildStreamMessages(agent, messages, route);
+        var streamMessages = await BuildStreamMessagesAsync(agent, messages, route, cancellationToken);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
 
@@ -268,7 +270,7 @@ public sealed class AssistantOrchestrator(
             UpdatedAt = DateTimeOffset.UtcNow,
             Messages = nextMessages
         }, cancellationToken);
-        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, cancellationToken);
+        await ScheduleMemoryConsolidationAsync(session.Id, request.PersistToMemory, nextMessages, cancellationToken);
         yield return new SessionChatStreamEvent("task_graph", Payload: graph);
         yield return new SessionChatStreamEvent("final", Result: finalResponse);
     }
@@ -296,12 +298,12 @@ public sealed class AssistantOrchestrator(
         var route = BuildRoute(request, session);
         var responseBuilder = new StringBuilder();
         LocalChatStreamChunk? finalChunk = null;
-        var messages = BuildStreamMessages(agent,
+        var messages = await BuildStreamMessagesAsync(agent,
         [
             .. session.Messages.Take(Math.Max(0, session.Messages.Count - 1)),
             new LocalChatMessage("assistant", toolResponse.Response),
             new LocalChatMessage("user", "Stream the final user-facing answer now. Preserve the tool findings exactly, but do not mention internal protocol details.")
-        ], null);
+        ], null, cancellationToken);
 
         yield return new SessionChatStreamEvent("progress", "Tool work complete. Streaming final answer...");
 
@@ -408,21 +410,31 @@ public sealed class AssistantOrchestrator(
         _ => 0.4
     };
 
-    private IReadOnlyList<LocalChatMessage> BuildStreamMessages(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, SessionRoute? route)
+    private async Task<IReadOnlyList<LocalChatMessage>> BuildStreamMessagesAsync(AgentDefinition agent, IReadOnlyList<LocalChatMessage> messages, SessionRoute? route, CancellationToken cancellationToken)
     {
         var basePrompt = route?.ResponseMode.Equals(ResponseModes.VoiceConversation, StringComparison.OrdinalIgnoreCase) == true
             ? _options.ConversationSystemPrompt
             : _options.SystemPrompt;
-        var systemPrompt = $"{basePrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly.";
+        var profileContext = FoundationUserProfileFormatter.FormatForPrompt(await foundationProfile.GetAsync(cancellationToken));
+        var systemPrompt = string.IsNullOrWhiteSpace(profileContext)
+            ? $"{basePrompt}\n\n{agent.SystemPrompt}\n\nTools are disabled for this streaming response. Answer directly."
+            : $"{basePrompt}\n\n{agent.SystemPrompt}\n\n{profileContext}\n\nTools are disabled for this streaming response. Answer directly.";
 
         return [new LocalChatMessage("system", systemPrompt), .. messages.Where(message => message.Role != "system")];
     }
 
     private sealed record ToolRunStream(IAsyncEnumerable<SessionChatStreamEvent> Events, Task<SessionChatResponse> Result);
 
-    private async Task ScheduleMemoryConsolidationAsync(string sessionId, bool persistToMemory, CancellationToken cancellationToken)
+    private async Task ScheduleMemoryConsolidationAsync(string sessionId, bool persistToMemory, IReadOnlyList<LocalChatMessage> messages, CancellationToken cancellationToken)
     {
         if (!persistToMemory || !_options.Memory.Enabled)
+        {
+            return;
+        }
+
+        var completedTurns = messages.Count(message => message.Role.Equals("user", StringComparison.OrdinalIgnoreCase));
+
+        if (completedTurns < 4 || completedTurns % 4 != 0)
         {
             return;
         }

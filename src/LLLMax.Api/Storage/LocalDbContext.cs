@@ -10,6 +10,8 @@ public sealed class LocalDbContext(DbContextOptions<LocalDbContext> options) : D
 
     public DbSet<AppMetadataEntity> AppMetadata => Set<AppMetadataEntity>();
 
+    public DbSet<UserProfileEntity> UserProfiles => Set<UserProfileEntity>();
+
     public DbSet<BackgroundJobEntity> BackgroundJobs => Set<BackgroundJobEntity>();
 
     public DbSet<BackgroundJobArtifactEntity> BackgroundJobArtifacts => Set<BackgroundJobArtifactEntity>();
@@ -55,6 +57,17 @@ public sealed class LocalDbContext(DbContextOptions<LocalDbContext> options) : D
             entity.ToTable("app_metadata");
             entity.HasKey(metadata => metadata.Key);
             entity.Property(metadata => metadata.Value).IsRequired();
+        });
+
+        modelBuilder.Entity<UserProfileEntity>(entity =>
+        {
+            entity.ToTable("user_profiles");
+            entity.HasKey(profile => profile.Id);
+            entity.Property(profile => profile.Username).IsRequired();
+            entity.Property(profile => profile.Email).IsRequired();
+            entity.Property(profile => profile.FullName).IsRequired();
+            entity.Property(profile => profile.Details).IsRequired();
+            entity.Property(profile => profile.Facts).IsRequired();
         });
 
         modelBuilder.Entity<BackgroundJobEntity>(entity =>

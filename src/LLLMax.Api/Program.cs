@@ -15,6 +15,7 @@ using LLLMax.Api.Skills;
 using LLLMax.Api.Storage;
 using LLLMax.Api.Tasks;
 using LLLMax.Api.Tools;
+using LLLMax.Api.UserProfile;
 using Microsoft.EntityFrameworkCore;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -138,6 +139,7 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
         _ => new FileVectorStore(serviceProvider.GetRequiredService<IEmbeddingGenerator>(), serviceProvider.GetRequiredService<LocalDataPaths>())
     };
 });
+builder.Services.AddSingleton<IFoundationUserProfileStore, EfFoundationUserProfileStore>();
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, EfApiIntegrationRegistry>();
 builder.Services.AddSingleton<IAssistantSessionStore, EfAssistantSessionStore>();
@@ -189,6 +191,7 @@ app.MapTaskGraphEndpoints();
 app.MapDocumentEndpoints();
 app.MapIntegrationEndpoints();
 app.MapSmartHomeEndpoints();
+app.MapUserProfileEndpoints();
 
 app.Run();
 
