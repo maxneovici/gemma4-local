@@ -36,17 +36,15 @@ public sealed class MemoryReflectionService(
             var subject = string.IsNullOrWhiteSpace(fact.Subject) ? "user" : fact.Subject.Trim();
             var existing = FindMatchingFact(existingProfile.Facts, text, category, topic, subject);
             var mergeKey = MergeKey(subject, category, topic, text);
-            var metadata = MemoryLayers.WithLayer(new Dictionary<string, string>
+            var metadata = MemoryMetadata.Build(new Dictionary<string, string>
             {
                 ["kind"] = "canonical_profile_fact",
                 ["category"] = category,
                 ["topic"] = topic,
                 ["subject"] = subject,
-                ["confidence"] = (fact.Confidence ?? existing?.Confidence ?? 0.7).ToString("0.00", System.Globalization.CultureInfo.InvariantCulture),
-                ["observedAt"] = now,
                 ["source"] = "memory_reflection",
                 ["mergeKey"] = mergeKey
-            }, MemoryLayers.Memory);
+            }, MemoryLayers.Memory, text, "memory_reflection", category, sourceRecordId: existing?.Id, confidence: fact.Confidence ?? existing?.Confidence ?? 0.7);
 
             if (existing is null)
             {
@@ -75,15 +73,14 @@ public sealed class MemoryReflectionService(
                     ["kind"] = "memory_category",
                     ["topic"] = name
                 }), cancellationToken);
-            var metadata = MemoryLayers.WithLayer(new Dictionary<string, string>
+            var metadata = MemoryMetadata.Build(new Dictionary<string, string>
             {
                 ["kind"] = "memory_category",
                 ["category"] = "memory_schema",
                 ["topic"] = name,
                 ["subject"] = "memory_graph",
-                ["observedAt"] = now,
                 ["source"] = "memory_reflection"
-            }, MemoryLayers.Memory);
+            }, MemoryLayers.Memory, text, "memory_reflection", "schema", confidence: 0.7);
 
             if (categoryRecords.Records.FirstOrDefault() is { } existingRecord)
             {

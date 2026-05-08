@@ -11,11 +11,18 @@ public sealed class MemoryWriteTool(ILocalMemoryStore memoryStore) : LocalToolBa
 
     protected override async Task<LocalToolResult> InvokeAsync(MemoryWriteArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
-        var metadata = MemoryLayers.WithLayer(arguments.Metadata, MemoryLayers.Memory);
+        var metadata = MemoryMetadata.Build(
+            arguments.Metadata,
+            MemoryLayers.Memory,
+            arguments.Text,
+            provenance: "tool_call",
+            memoryType: arguments.MemoryType,
+            conversationId: invocation.ConversationId,
+            sourceMessageRole: "user",
+            confidence: 0.82,
+            reviewRequired: false);
         metadata.TryAdd("agent", invocation.Agent.Name);
-        metadata.TryAdd("conversationId", invocation.ConversationId ?? string.Empty);
         metadata.TryAdd("kind", "model_memory");
-        metadata.TryAdd("observedAt", DateTimeOffset.UtcNow.ToString("O"));
         metadata.TryAdd("category", "profile");
         metadata.TryAdd("subject", "user");
 
@@ -32,4 +39,5 @@ public sealed class MemoryWriteTool(ILocalMemoryStore memoryStore) : LocalToolBa
 public sealed record MemoryWriteArguments(
     [property: Required] string Text,
     string? Collection = null,
+    string? MemoryType = null,
     IReadOnlyDictionary<string, string>? Metadata = null);

@@ -66,6 +66,7 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecal
         }
 
         await ExpandRelatedMemoriesAsync(bands, cancellationToken);
+        await ExpandGraphAdjacentMemoriesAsync(bands, cancellationToken);
 
         var candidates = MemoryRecallPolicy.SelectTopDiverse(bands, queries, plan, Math.Max(limit * 4, limit));
         var ids = await recallPlanner.RerankAsync(arguments.Query, plan, candidates, limit, cancellationToken);
@@ -149,6 +150,51 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecal
                 bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Score, 0.55), metadata), seed.Priority + 3, seed.QueryIndex));
             }
         }
+    }
+
+    private async Task ExpandGraphAdjacentMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands, CancellationToken cancellationToken)
+    {
+        var seeds = bands.OrderByDescending(item => item.Result.Score).Take(10).ToList();
+        var addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in seeds)
+        {
+            foreach (var filter in BuildAdjacencyFilters(seed.Result.Metadata))
+            {
+                var inspected = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(Limit: 8, Filter: filter), cancellationToken);
+
+                foreach (var record in inspected.Records)
+                {
+                    if (!addedKeys.Add(record.Id))
+                    {
+                        continue;
+                    }
+
+                    var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+                    metadata.TryAdd("collection", MemoryLayers.Memory);
+                    metadata.TryAdd("recallExpansion", "graph_adjacency");
+                    bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Result.Score, 0.48), metadata), seed.Priority + 4, seed.QueryIndex));
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<IReadOnlyDictionary<string, string>> BuildAdjacencyFilters(IReadOnlyDictionary<string, string> metadata)
+    {
+        foreach (var key in new[] { "topic", "category", "project", MemoryMetadata.TypeKey, MemoryMetadata.MergeKey })
+        {
+            if (metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) && !IsOverbroadAdjacency(key, value))
+            {
+                yield return new Dictionary<string, string> { [key] = value };
+            }
+        }
+    }
+
+    private static bool IsOverbroadAdjacency(string key, string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return key.Equals(MemoryMetadata.TypeKey, StringComparison.OrdinalIgnoreCase) && normalized is "fact" or "summary" or "schema"
+            || key.Equals("category", StringComparison.OrdinalIgnoreCase) && normalized is "profile" or "session_summary";
     }
 
     private sealed record MemoryCollectionBand(string Name, int Priority, IReadOnlyDictionary<string, string>? Filter);

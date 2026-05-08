@@ -10,6 +10,13 @@ const state = {
   backgroundJobs: [],
   memoryCollections: [],
   memoryStats: null,
+  memoryGraph: null,
+  memoryGraphLayer: 'memory',
+  memoryGraphQuery: '',
+  memoryGraphZoom: 1,
+  memoryGraphFocusId: null,
+  memoryGraphTypes: [],
+  memoryReview: null,
   foundationProfile: null,
   selectedCollection: null,
   memoryProfile: null,
@@ -738,6 +745,7 @@ async function loadMemoryStats() {
   `;
   renderFoundationProfile(foundationProfile, profile);
   renderMemoryDashboard(stats, profile);
+  await loadMemoryGraph({ renderOnlyIfVisible: true });
   await loadMemoryCollections();
 }
 
@@ -893,16 +901,33 @@ function renderMemoryDashboardStage(stats, profile, reflected, topCollections, c
   if (!$('memoryDashboardMain')) return;
 
   const facts = profile?.facts ?? [];
-  const totalRecords = Math.max(1, stats?.recordCount ?? 1);
+  const memoryCount = stats?.collections?.find(collection => collection.name === 'memory')?.recordCount ?? 0;
+  const knowledgeCount = stats?.collections?.find(collection => collection.name === 'knowledge')?.recordCount ?? 0;
   $('memoryDashboardMain').innerHTML = `
     <section class="dashboard-hero">
       <div><span>Total Records</span><strong>${escapeHtml(stats?.recordCount ?? 0)}</strong></div>
-      <div><span>Collections</span><strong>${escapeHtml(stats?.collectionCount ?? 0)}</strong></div>
+      <div><span>Memory Vectors</span><strong>${escapeHtml(memoryCount)}</strong></div>
+      <div><span>Knowledge Vectors</span><strong>${escapeHtml(knowledgeCount)}</strong></div>
       <div><span>Canonical Facts</span><strong>${escapeHtml(profile?.factCount ?? 0)}</strong></div>
-      <div><span>Last Reflection</span><strong>${escapeHtml(reflected)}</strong></div>
     </section>
-    <section class="dashboard-graph-canvas">
-      ${topCollections.map((collection, index) => `<article class="dashboard-node node-${index % 6}" style="--weight:${Math.max(0.18, Math.min(1, (collection.recordCount ?? 0) / totalRecords))}"><strong>${escapeHtml(humanizeCollectionName(collection.name))}</strong><span>${escapeHtml(collection.recordCount ?? 0)} records</span></article>`).join('') || '<p class="muted">No memory collections yet.</p>'}
+    <section class="dashboard-graph-panel">
+      <div class="graph-toolbar">
+        <div class="graph-toggle" role="group" aria-label="Graph layer">
+          <button data-graph-layer="memory" class="${state.memoryGraphLayer === 'memory' ? 'active' : ''}" type="button">Memory</button>
+          <button data-graph-layer="knowledge" class="${state.memoryGraphLayer === 'knowledge' ? 'active' : ''}" type="button">Knowledge</button>
+        </div>
+        <input id="memoryGraphQuery" value="${escapeHtml(state.memoryGraphQuery)}" placeholder="Query vectors: hiking maps, opinions, field notes...">
+        <button id="runMemoryGraphQuery" type="button">Map</button>
+        <button id="memoryGraphZoomOut" type="button">-</button>
+        <button id="memoryGraphZoomIn" type="button">+</button>
+        <button id="memoryGraphReset" type="button">Reset</button>
+      </div>
+      <div class="graph-type-filters">
+        ${memoryGraphTypes().map(type => `<button data-graph-type="${escapeHtml(type)}" class="${state.memoryGraphTypes.includes(type) ? 'active' : ''}" type="button">${escapeHtml(type)}</button>`).join('')}
+      </div>
+      <div id="memoryGraphCanvas" class="memory-graph-canvas"></div>
+      <div id="memoryGraphInspector" class="memory-graph-inspector"></div>
+      <div id="memoryReviewInbox" class="memory-review-inbox"></div>
     </section>
     <section class="dashboard-grid">
       <article>
@@ -919,16 +944,223 @@ function renderMemoryDashboardStage(stats, profile, reflected, topCollections, c
       </article>
     </section>
   `;
+  bindMemoryGraphControls();
+  renderMemoryGraphCanvas();
 }
 
 function openMemoryDashboard() {
   closeOperationsStage();
   $('memoryDashboardStage').hidden = false;
   renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+  loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
 }
 
 function closeMemoryDashboard() {
   $('memoryDashboardStage').hidden = true;
+}
+
+async function loadMemoryGraph(options = {}) {
+  if (options.renderOnlyIfVisible && $('memoryDashboardStage')?.hidden) return;
+
+  const query = state.memoryGraphQuery.trim();
+  state.memoryGraph = await api('/memory/graph', {
+    method: 'POST',
+    body: JSON.stringify({
+      layer: state.memoryGraphLayer,
+      query: query || null,
+      limit: query ? 72 : 96,
+      focusId: state.memoryGraphFocusId,
+      types: state.memoryGraphTypes
+    })
+  });
+  state.memoryReview = await api('/memory/review');
+  renderMemoryGraphCanvas();
+  renderMemoryReviewInbox();
+}
+
+function bindMemoryGraphControls() {
+  document.querySelectorAll('[data-graph-layer]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.memoryGraphLayer = button.dataset.graphLayer;
+      state.memoryGraphFocusId = null;
+      state.memoryGraphZoom = 1;
+      renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+      loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+    });
+  });
+  $('runMemoryGraphQuery')?.addEventListener('click', () => {
+    state.memoryGraphQuery = $('memoryGraphQuery').value;
+    state.memoryGraphFocusId = null;
+    loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+  });
+  $('memoryGraphQuery')?.addEventListener('keydown', event => {
+    if (event.key === 'Enter') {
+      state.memoryGraphQuery = event.target.value;
+      state.memoryGraphFocusId = null;
+      loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+    }
+  });
+  $('memoryGraphZoomIn')?.addEventListener('click', () => setMemoryGraphZoom(state.memoryGraphZoom + 0.18));
+  $('memoryGraphZoomOut')?.addEventListener('click', () => setMemoryGraphZoom(state.memoryGraphZoom - 0.18));
+  document.querySelectorAll('[data-graph-type]').forEach(button => {
+    button.addEventListener('click', () => {
+      const type = button.dataset.graphType;
+      state.memoryGraphTypes = state.memoryGraphTypes.includes(type)
+        ? state.memoryGraphTypes.filter(existing => existing !== type)
+        : [...state.memoryGraphTypes, type];
+      renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+      loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+    });
+  });
+  $('memoryGraphReset')?.addEventListener('click', () => {
+    state.memoryGraphZoom = 1;
+    state.memoryGraphFocusId = null;
+    state.memoryGraphQuery = '';
+    state.memoryGraphTypes = [];
+    renderMemoryDashboard(state.memoryStats, state.memoryProfile);
+    loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+  });
+}
+
+function setMemoryGraphZoom(value) {
+  state.memoryGraphZoom = Math.max(0.62, Math.min(2.6, value));
+  renderMemoryGraphCanvas();
+}
+
+function renderMemoryGraphCanvas() {
+  const canvas = $('memoryGraphCanvas');
+  if (!canvas) return;
+
+  const graph = state.memoryGraph;
+  if (!graph) {
+    canvas.innerHTML = '<div class="graph-empty"><span></span><strong>Awaiting vector field</strong><p>Open the dashboard or run a query to project memory and knowledge clusters.</p></div>';
+    renderMemoryGraphInspector(null);
+    return;
+  }
+
+  const zoom = state.memoryGraphZoom;
+  const center = 300;
+  const project = node => ({
+    x: center + ((node.x - 50) * 5.15 * zoom),
+    y: center + ((node.y - 50) * 5.15 * zoom)
+  });
+  const nodeById = new Map((graph.nodes ?? []).map(node => [node.id, node]));
+  const edges = graph.edges ?? [];
+  const nodes = graph.nodes ?? [];
+
+  canvas.innerHTML = `
+    <svg class="memory-graph-svg" viewBox="0 0 600 600" role="img" aria-label="${escapeHtml(graph.layer)} vector graph">
+      <defs>
+        <radialGradient id="graphGlow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/><stop offset="100%" stop-color="#14b8a6" stop-opacity="0.02"/></radialGradient>
+        <filter id="nodeGlow"><feGaussianBlur stdDeviation="3.5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+      </defs>
+      <circle cx="300" cy="300" r="238" class="graph-orbit"></circle>
+      <circle cx="300" cy="300" r="145" class="graph-orbit inner"></circle>
+      ${edges.map(edge => renderGraphEdge(edge, nodeById, project)).join('')}
+      ${nodes.map(node => renderGraphNode(node, project)).join('')}
+    </svg>
+    <div class="graph-readout"><strong>${escapeHtml(graph.layer)}</strong><span>${escapeHtml(graph.recordCount)} records · ${escapeHtml(nodes.filter(node => node.kind === 'concept').length)} clusters · zoom ${Math.round(zoom * 100)}%</span></div>
+  `;
+  canvas.querySelectorAll('[data-graph-node]').forEach(element => {
+    element.addEventListener('click', () => focusMemoryGraphNode(element.dataset.graphNode));
+  });
+  renderMemoryGraphInspector(nodes.find(node => node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId) ?? null);
+}
+
+function renderGraphEdge(edge, nodeById, project) {
+  const source = nodeById.get(edge.source);
+  const target = nodeById.get(edge.target);
+  if (!source || !target) return '';
+  const start = project(source);
+  const end = project(target);
+  return `<line class="graph-edge ${escapeHtml(edge.kind)}" x1="${start.x.toFixed(1)}" y1="${start.y.toFixed(1)}" x2="${end.x.toFixed(1)}" y2="${end.y.toFixed(1)}" stroke-width="${Math.max(0.45, edge.weight * 2.1).toFixed(2)}"></line>`;
+}
+
+function renderGraphNode(node, project) {
+  const point = project(node);
+  const isConcept = node.kind === 'concept';
+  const radius = isConcept ? Math.min(42, 13 + node.weight * 2.6) : 5.5;
+  const selected = node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId;
+  return `
+    <g class="graph-node ${escapeHtml(node.kind)} ${escapeHtml(node.memoryType ?? '')} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(node.recordId ?? node.id)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+      <circle r="${radius.toFixed(1)}" filter="url(#nodeGlow)"></circle>
+      ${isConcept ? `<text y="${(radius + 13).toFixed(1)}">${escapeHtml(truncateMiddle(node.label, 22))}</text>` : ''}
+    </g>
+  `;
+}
+
+function focusMemoryGraphNode(id) {
+  const node = state.memoryGraph?.nodes?.find(item => item.id === id || item.recordId === id);
+  renderMemoryGraphInspector(node ?? null);
+  if (!node?.recordId) {
+    state.memoryGraphFocusId = node?.id ?? null;
+    return;
+  }
+
+  state.memoryGraphFocusId = node.recordId;
+  loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+}
+
+function renderMemoryGraphInspector(node) {
+  const inspector = $('memoryGraphInspector');
+  if (!inspector) return;
+
+  if (!node) {
+    inspector.innerHTML = '<strong>Vector Topology</strong><p>Click a bright concept or small record node to inspect how memories, opinions, facts, and knowledge cluster over time.</p>';
+    return;
+  }
+
+  const metadata = Object.entries(node.metadata ?? {}).slice(0, 8).map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`).join('');
+  inspector.innerHTML = `
+    <strong>${escapeHtml(node.label)}</strong>
+    <div class="graph-badges">${node.memoryType ? `<span>${escapeHtml(node.memoryType)}</span>` : ''}${node.provenance ? `<span>${escapeHtml(node.provenance)}</span>` : ''}${node.observedAt ? `<span>${escapeHtml(new Date(node.observedAt).toLocaleString())}</span>` : ''}</div>
+    <p>${escapeHtml(node.textPreview ?? `${node.weight} linked vector${node.weight === 1 ? '' : 's'}`)}</p>
+    <div class="metadata-row">${metadata || `<span>${escapeHtml(node.kind)}</span>`}</div>
+    ${node.recordId ? `<button data-open-memory-record="${escapeHtml(node.recordId)}" data-open-memory-layer="${escapeHtml(state.memoryGraphLayer)}" type="button">Open Source Record</button>` : ''}
+  `;
+  inspector.querySelector('[data-open-memory-record]')?.addEventListener('click', event => openGraphMemoryRecord(event.target.dataset.openMemoryLayer, event.target.dataset.openMemoryRecord));
+}
+
+function memoryGraphTypes() {
+  return ['identity', 'relationship', 'preference', 'opinion', 'interest', 'goal', 'project', 'constraint', 'fact', 'knowledge'];
+}
+
+async function openGraphMemoryRecord(collection, id) {
+  await guarded(async () => {
+    const record = await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}`);
+    $('memoryGraphInspector').innerHTML = `
+      <strong>Source Record</strong>
+      <div class="graph-badges"><span>${escapeHtml(collection)}</span><span>${escapeHtml(record.metadata?.memoryType ?? 'record')}</span><span>${escapeHtml(record.metadata?.provenance ?? 'unknown provenance')}</span></div>
+      <p>${escapeHtml(record.text)}</p>
+      <div class="metadata-row">${Object.entries(record.metadata ?? {}).map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`).join('')}</div>
+      ${record.metadata?.sourceConversationId ? `<button id="openSourceSession" type="button">Open Source Session</button>` : ''}
+    `;
+    $('openSourceSession')?.addEventListener('click', () => openSession(record.metadata.sourceConversationId));
+  }, 'Opening memory source...', { overlay: false });
+}
+
+function renderMemoryReviewInbox() {
+  const container = $('memoryReviewInbox');
+  if (!container) return;
+
+  const review = state.memoryReview;
+  if (!review) {
+    container.innerHTML = '<strong>Review Inbox</strong><p class="muted">Loading memory review signals...</p>';
+    return;
+  }
+
+  const duplicateGroups = review.duplicateGroups ?? [];
+  const pending = review.pending ?? [];
+  container.innerHTML = `
+    <strong>Review Inbox</strong>
+    <p>${escapeHtml(review.pendingCount)} pending · ${escapeHtml(review.duplicateGroupCount)} duplicate groups</p>
+    ${pending.slice(0, 3).map(renderReviewItem).join('')}
+    ${duplicateGroups.slice(0, 4).map(group => `<details><summary>${escapeHtml(group.memoryType ?? 'duplicate')} · ${escapeHtml(group.records.length)} records</summary>${group.records.slice(0, 4).map(renderReviewItem).join('')}</details>`).join('')}
+  `;
+}
+
+function renderReviewItem(item) {
+  return `<article class="review-item"><span>${escapeHtml(item.memoryType ?? 'record')} · ${escapeHtml(item.provenance ?? 'unknown')} · ${escapeHtml(item.confidence ?? '-')}</span><p>${escapeHtml(item.textPreview)}</p></article>`;
 }
 
 const operationPanels = {

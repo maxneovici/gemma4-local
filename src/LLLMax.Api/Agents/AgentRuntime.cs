@@ -908,6 +908,10 @@ Browsed source bundle:
         var parts = new[]
         {
             MetadataValue(metadata, "collection") is { } collection ? $"collection={collection}" : null,
+            MetadataValue(metadata, MemoryMetadata.TypeKey) is { } memoryType ? $"type={memoryType}" : null,
+            MetadataValue(metadata, MemoryMetadata.ProvenanceKey) is { } provenance ? $"provenance={provenance}" : null,
+            MetadataValue(metadata, MemoryMetadata.ConfidenceKey) is { } confidence ? $"confidence={confidence}" : null,
+            MetadataValue(metadata, "recallExpansion") is { } recallExpansion ? $"expandedBy={recallExpansion}" : null,
             MetadataValue(metadata, "category") is { } category ? $"category={category}" : null,
             MetadataValue(metadata, "topic") is { } topic ? $"topic={topic}" : null,
             MetadataValue(metadata, "subject") is { } subject ? $"subject={subject}" : null,
@@ -1003,7 +1007,7 @@ Browsed source bundle:
     private async Task ExpandRelatedMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands, CancellationToken cancellationToken)
     {
         var seedSessions = bands
-            .Select(item => new { SessionId = MetadataValue(item.Result.Metadata, "sessionId"), item.Result.Score, item.Priority, item.QueryIndex })
+            .Select(item => new { SessionId = MetadataValue(item.Result.Metadata, "sessionId") ?? MetadataValue(item.Result.Metadata, MemoryMetadata.SourceConversationKey), item.Result.Score, item.Priority, item.QueryIndex })
             .Where(item => !string.IsNullOrWhiteSpace(item.SessionId))
             .GroupBy(item => item.SessionId!, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(item => item.Score).First())
@@ -1024,6 +1028,56 @@ Browsed source bundle:
                 bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Score, 0.55), metadata), seed.Priority + 3, seed.QueryIndex));
             }
         }
+
+        await ExpandGraphAdjacentMemoriesAsync(bands, cancellationToken);
+    }
+
+    private async Task ExpandGraphAdjacentMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands, CancellationToken cancellationToken)
+    {
+        var seeds = bands
+            .OrderByDescending(item => item.Result.Score)
+            .Take(10)
+            .ToList();
+        var addedKeys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var seed in seeds)
+        {
+            foreach (var filter in BuildAdjacencyFilters(seed.Result.Metadata))
+            {
+                var inspected = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(Limit: 8, Filter: filter), cancellationToken);
+
+                foreach (var record in inspected.Records)
+                {
+                    if (!addedKeys.Add(record.Id))
+                    {
+                        continue;
+                    }
+
+                    var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+                    metadata.TryAdd("collection", MemoryLayers.Memory);
+                    metadata.TryAdd("recallExpansion", "graph_adjacency");
+                    bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Result.Score, 0.48), metadata), seed.Priority + 4, seed.QueryIndex));
+                }
+            }
+        }
+    }
+
+    private static IEnumerable<IReadOnlyDictionary<string, string>> BuildAdjacencyFilters(IReadOnlyDictionary<string, string> metadata)
+    {
+        foreach (var key in new[] { "topic", "category", "project", MemoryMetadata.TypeKey, MemoryMetadata.MergeKey })
+        {
+            if (MetadataValue(metadata, key) is { } value && !IsOverbroadAdjacency(key, value))
+            {
+                yield return new Dictionary<string, string> { [key] = value };
+            }
+        }
+    }
+
+    private static bool IsOverbroadAdjacency(string key, string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        return key.Equals(MemoryMetadata.TypeKey, StringComparison.OrdinalIgnoreCase) && normalized is "fact" or "summary" or "schema"
+            || key.Equals("category", StringComparison.OrdinalIgnoreCase) && normalized is "profile" or "session_summary";
     }
 
     private sealed record MemoryCollectionBand(string Name, int Priority, IReadOnlyDictionary<string, string>? Filter);
@@ -1274,14 +1328,12 @@ Browsed source bundle:
             await memoryStore.UpsertAsync(new MemoryUpsertRequest(
                 Collection: MemoryLayers.Memory,
                 Text: $"User said: {request.Message}",
-                Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                 {
                     ["agent"] = agent.Name,
-                    ["conversationId"] = request.ConversationId ?? string.Empty,
                     ["kind"] = "user_turn",
-                    ["subject"] = "user",
-                    ["observedAt"] = observedAt
-                }, MemoryLayers.Memory)), cancellationToken);
+                    ["subject"] = "user"
+                }, MemoryLayers.Memory, request.Message, "user_turn", "source_turn", request.ConversationId, "user", confidence: 1.0)), cancellationToken);
 
             var profileMemory = await ExtractPassiveProfileMemoryAsync(request.Message, agent.Name, request.ConversationId, observedAt, cancellationToken);
 
@@ -1311,7 +1363,7 @@ Browsed source bundle:
                 Model: runtimeModels.GetCoordinatorModel(),
                 Messages:
                 [
-                    new LocalChatMessage("system", "Decide whether a user message contains a durable personal memory worth saving for future personalization. Work in any language. Return exactly one compact JSON object: {\"shouldStore\":true|false,\"text\":\"...\",\"category\":\"...\",\"topic\":\"...\",\"subject\":\"user\"}. Store only user-authored stable facts, preferences, identity details, relationships, recurring interests, projects, workflows, communication preferences, long-term goals, or user-requested reminders. Do not store transient chat commands, test instructions, assistant claims, secrets, credentials, medical/legal/financial sensitive details, or raw text that includes an instruction like 'just say'. If storing, rewrite as a concise neutral fact in the user's language and remove task-only wording."),
+                    new LocalChatMessage("system", "Decide whether a user message contains a durable personal memory worth saving for future personalization. Work in any language. Return exactly one compact JSON object: {\"shouldStore\":true|false,\"text\":\"...\",\"category\":\"...\",\"topic\":\"...\",\"subject\":\"user\",\"memoryType\":\"identity|relationship|preference|opinion|interest|goal|project|constraint|fact\",\"confidence\":0.0-1.0,\"reviewRequired\":true|false}. Store only user-authored stable facts, preferences, identity details, relationships, recurring interests, projects, workflows, communication preferences, long-term goals, opinions, constraints, or user-requested reminders. Do not store transient chat commands, test instructions, assistant claims, secrets, credentials, medical/legal/financial sensitive details, or raw text that includes an instruction like 'just say'. If storing, rewrite as a concise neutral fact in the user's language and remove task-only wording. Set reviewRequired=true for low confidence, conflict, or potentially sensitive items."),
                     new LocalChatMessage("user", normalized)
                 ],
                 Temperature: 0.1,
@@ -1327,17 +1379,15 @@ Browsed source bundle:
             return new MemoryUpsertRequest(
                 Collection: MemoryLayers.Memory,
                 Text: payload.Text.Trim(),
-                Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                 {
                     ["agent"] = agentName,
-                    ["conversationId"] = conversationId ?? string.Empty,
                     ["kind"] = "profile_fact",
                     ["category"] = string.IsNullOrWhiteSpace(payload.Category) ? "profile" : payload.Category.Trim(),
                     ["topic"] = payload.Topic?.Trim() ?? string.Empty,
                     ["subject"] = string.IsNullOrWhiteSpace(payload.Subject) ? "user" : payload.Subject.Trim(),
-                    ["source"] = "passive_interaction",
-                    ["observedAt"] = observedAt
-                }, MemoryLayers.Memory));
+                    ["source"] = "passive_interaction"
+                }, MemoryLayers.Memory, payload.Text.Trim(), "passive_extraction", payload.MemoryType, conversationId, "user", confidence: Math.Clamp(payload.Confidence ?? 0.7, 0, 1), reviewRequired: payload.ReviewRequired));
         }
         catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException or JsonException)
         {
@@ -1352,5 +1402,5 @@ Browsed source bundle:
         return start >= 0 && end > start ? text[start..(end + 1)] : null;
     }
 
-    private sealed record PassiveProfileMemoryPayload(bool ShouldStore, string? Text, string? Category, string? Topic, string? Subject);
+    private sealed record PassiveProfileMemoryPayload(bool ShouldStore, string? Text, string? Category, string? Topic, string? Subject, string? MemoryType, double? Confidence, bool ReviewRequired);
 }

@@ -43,14 +43,13 @@ public sealed class MemoryConsolidationService(
                 new(
                     Collection: MemoryLayers.Memory,
                     Text: summary,
-                    Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                    Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                     {
                         ["kind"] = "consolidated_session",
                         ["category"] = "session_summary",
                         ["sessionId"] = session.Id,
-                        ["taskGraphId"] = graph?.Id ?? string.Empty,
-                        ["observedAt"] = now.ToString("O")
-                    }, MemoryLayers.Memory))
+                        ["taskGraphId"] = graph?.Id ?? string.Empty
+                    }, MemoryLayers.Memory, summary, "session_consolidation", "summary", session.Id, "user", confidence: 0.72))
             };
 
             writes.AddRange((payload.CoreMemories ?? [])
@@ -59,14 +58,13 @@ public sealed class MemoryConsolidationService(
                 .Select(memory => new MemoryUpsertRequest(
                     Collection: MemoryLayers.Memory,
                     Text: memory.Trim(),
-                    Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                    Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                     {
                         ["kind"] = "core_memory",
                         ["category"] = "profile",
                         ["sessionId"] = session.Id,
                         ["subject"] = "user",
-                        ["observedAt"] = now.ToString("O")
-                    }, MemoryLayers.Memory))));
+                    }, MemoryLayers.Memory, memory.Trim(), "session_consolidation", null, session.Id, "user", confidence: 0.76))));
 
             writes.AddRange((payload.Interests ?? [])
                 .Where(interest => !string.IsNullOrWhiteSpace(interest))
@@ -74,41 +72,38 @@ public sealed class MemoryConsolidationService(
                 .Select(interest => new MemoryUpsertRequest(
                     Collection: MemoryLayers.Memory,
                     Text: interest.Trim(),
-                    Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                    Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                     {
                         ["kind"] = "interest",
                         ["category"] = "profile",
                         ["sessionId"] = session.Id,
                         ["subject"] = "user",
-                        ["observedAt"] = now.ToString("O")
-                    }, MemoryLayers.Memory))));
+                    }, MemoryLayers.Memory, interest.Trim(), "session_consolidation", "interest", session.Id, "user", confidence: 0.76))));
 
             writes.AddRange((payload.OpenLoops ?? [])
                 .Where(openLoop => !string.IsNullOrWhiteSpace(openLoop))
                 .Select(openLoop => new MemoryUpsertRequest(
                     Collection: MemoryLayers.Memory,
                     Text: openLoop.Trim(),
-                    Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                    Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                     {
                         ["kind"] = "open_loop",
                         ["category"] = "follow_up",
                         ["sessionId"] = session.Id,
-                        ["observedAt"] = now.ToString("O")
-                    }, MemoryLayers.Memory))));
+                    }, MemoryLayers.Memory, openLoop.Trim(), "session_consolidation", "goal", session.Id, "assistant", confidence: 0.62, reviewRequired: true))));
 
             if (graph is not null)
             {
                 writes.Add(new MemoryUpsertRequest(
                     Collection: MemoryLayers.Memory,
                     Text: FormatTaskGraphMemory(graph),
-                    Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+                    Metadata: MemoryMetadata.Build(new Dictionary<string, string>
                     {
                         ["kind"] = "task_graph",
                         ["sessionId"] = session.Id,
                         ["taskGraphId"] = graph.Id,
-                        ["status"] = graph.Status,
-                        ["observedAt"] = now.ToString("O")
-                    }, MemoryLayers.Memory)));
+                        ["status"] = graph.Status
+                    }, MemoryLayers.Memory, FormatTaskGraphMemory(graph), "task_trace", "summary", session.Id, "assistant", confidence: 0.5, reviewRequired: true)));
             }
 
             foreach (var write in writes)

@@ -97,3 +97,60 @@ public sealed record MemoryTenantGroup(
     IReadOnlyList<MemoryCategoryGroup> Categories);
 
 public sealed record MemoryCategoryGroup(string Category, int Count);
+
+public sealed record MemoryGraphRequest(
+    string Layer = MemoryLayers.Memory,
+    string? Query = null,
+    int Limit = 80,
+    string? FocusId = null,
+    IReadOnlyList<string>? Types = null,
+    IReadOnlyDictionary<string, string>? Filter = null);
+
+public sealed record MemoryGraphResponse(
+    string Layer,
+    string? Query,
+    int RecordCount,
+    IReadOnlyList<MemoryGraphNode> Nodes,
+    IReadOnlyList<MemoryGraphEdge> Edges);
+
+public sealed record MemoryGraphNode(
+    string Id,
+    string Kind,
+    string Label,
+    int Weight,
+    double X,
+    double Y,
+    string? RecordId = null,
+    string? TextPreview = null,
+    string? MemoryType = null,
+    string? Provenance = null,
+    string? ObservedAt = null,
+    IReadOnlyDictionary<string, string>? Metadata = null);
+
+public sealed record MemoryGraphEdge(
+    string Source,
+    string Target,
+    double Weight,
+    string Kind);
+
+public sealed record MemoryReviewResponse(
+    int PendingCount,
+    int DuplicateGroupCount,
+    IReadOnlyList<MemoryReviewItem> Pending,
+    IReadOnlyList<MemoryDuplicateGroup> DuplicateGroups);
+
+public sealed record MemoryReviewItem(
+    string Id,
+    string Collection,
+    string TextPreview,
+    string? MemoryType,
+    string? Provenance,
+    string? Confidence,
+    string? ObservedAt,
+    IReadOnlyDictionary<string, string> Metadata);
+
+public sealed record MemoryDuplicateGroup(
+    string MergeKey,
+    string? MemoryType,
+    string? Topic,
+    IReadOnlyList<MemoryReviewItem> Records);

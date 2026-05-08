@@ -166,11 +166,11 @@ public sealed class DocumentService(
         await memoryStore.UpsertAsync(new MemoryUpsertRequest(
             Collection: MemoryLayers.Knowledge,
             Text: response.Message?.Content ?? string.Empty,
-            Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+            Metadata: MemoryMetadata.Build(new Dictionary<string, string>
             {
                 ["source"] = file,
                 ["kind"] = "ocr"
-            }, MemoryLayers.Knowledge)), cancellationToken);
+            }, MemoryLayers.Knowledge, response.Message?.Content ?? string.Empty, "ocr", "knowledge", confidence: 0.66, reviewRequired: true)), cancellationToken);
 
         return new OcrResponse(request.DocumentId, response.Message?.Content ?? string.Empty, response.Model);
     }
@@ -186,11 +186,11 @@ public sealed class DocumentService(
         await memoryStore.UpsertAsync(new MemoryUpsertRequest(
             Collection: MemoryLayers.Knowledge,
             Text: json,
-            Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
+            Metadata: MemoryMetadata.Build(new Dictionary<string, string>
             {
                 ["source"] = file,
                 ["kind"] = "invoice_extraction"
-            }, MemoryLayers.Knowledge)), cancellationToken);
+            }, MemoryLayers.Knowledge, json, "invoice_extraction", "knowledge", confidence: 0.66, reviewRequired: true)), cancellationToken);
 
         return new InvoiceExtractionResponse(request.DocumentId, json, response.Model);
     }
@@ -285,7 +285,7 @@ public sealed class DocumentService(
     {
         var relativePath = Path.GetRelativePath(folder, file);
         var relativeDirectory = Path.GetDirectoryName(relativePath);
-        var metadata = MemoryLayers.WithLayer(request.Metadata, MemoryLayers.Knowledge);
+        var metadata = MemoryMetadata.Build(request.Metadata, MemoryLayers.Knowledge, Path.GetFileName(file), "document_vectorization", "knowledge", confidence: 0.86);
         metadata["source"] = file;
         metadata["sourceFile"] = Path.GetFileName(file);
         metadata["sourceRelativePath"] = relativePath;
