@@ -35,15 +35,19 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
                 Arguments: new Dictionary<string, string> { ["url"] = uri.ToString() }), cancellationToken);
         }
 
-        var text = await httpClientFactory.CreateClient("web-browse").GetStringAsync(uri, cancellationToken);
-        text = StripHtml(text);
+        var html = await httpClientFactory.CreateClient("web-browse").GetStringAsync(uri, cancellationToken);
+        var highlights = ExtractHighlights(html);
+        var text = StripHtml(html);
 
         var content = text.Length <= _options.WebBrowsing.MaxResponseCharacters
             ? text
             : text[.._options.WebBrowsing.MaxResponseCharacters];
+        var result = highlights.Count == 0
+            ? $"URL: {uri}\n\n{content}"
+            : $"URL: {uri}\n\nLikely page headlines / article candidates:\n{string.Join("\n", highlights.Select(item => $"- {item}"))}\n\nPage text:\n{content}";
 
         return new LocalToolResult(
-            $"URL: {uri}\n\n{content}\n\n{GuidanceFor(uri, content)}",
+            $"{result}\n\n{GuidanceFor(uri, content)}",
             [new CitationSource("web", uri.Host, Url: uri.ToString(), Source: uri.ToString())]);
     }
 
@@ -55,6 +59,48 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             .Pipe(value => Regex.Replace(value, "<[^>]+>", " "))
             .Pipe(value => Regex.Replace(value, "\\s+", " "))
             .Trim();
+
+    private static IReadOnlyList<string> ExtractHighlights(string html)
+    {
+        var candidates = new List<string>();
+
+        candidates.AddRange(Regex.Matches(html, @"<h[1-3][^>]*>(?<text>[\s\S]*?)</h[1-3]>", RegexOptions.IgnoreCase)
+            .Select(match => StripHtml(match.Groups["text"].Value)));
+        candidates.AddRange(Regex.Matches(html, @"<a\b[^>]*>(?<text>[\s\S]*?)</a>", RegexOptions.IgnoreCase)
+            .Select(match => StripHtml(match.Groups["text"].Value)));
+        candidates.AddRange(Regex.Matches(html, "\\b(?:aria-label|title)=['\\\" ](?<text>[^'\\\">]{28,180})['\\\" ]", RegexOptions.IgnoreCase)
+            .Select(match => match.Groups["text"].Value));
+
+        return candidates
+            .Select(CleanHighlight)
+            .Where(item => item.Length is >= 28 and <= 150)
+            .Where(IsLikelyHeadline)
+            .Where(item => item.Count(char.IsLetter) >= 18)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Take(12)
+            .ToList();
+    }
+
+    private static string CleanHighlight(string value) =>
+        Regex.Replace(value, "\\s+", " ").Trim(' ', '-', '•', '|', ':');
+
+    private static bool IsLikelyHeadline(string value)
+    {
+        var lower = value.ToLowerInvariant();
+
+        if (ContainsAny(lower, "logga in", "prenumerera", "kundservice", "annons", "cookie", "hoppa till", "menu", "meny", "quiz", "korsord", "erbjudanden", "något gick fel", "använd förstorad", "läs mer", "foto:"))
+        {
+            return false;
+        }
+
+        return (Regex.IsMatch(value, @"\b\d{1,2}:\d{2}\b")
+            || ContainsAny(lower, "just nu", "senaste", "direkt", "döms", "anklagar", "pausar", "larm", "kriget", "konflikt", "sverige", "världen", "politik", "ekonomi", "sport", "kultur")
+            || char.IsUpper(value[0]))
+            && value.Count(character => character == ' ') >= 3;
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static string GuidanceFor(Uri uri, string content)
     {

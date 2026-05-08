@@ -25,7 +25,10 @@ const state = {
   currentMessages: [],
   isStreaming: false,
   activeAssistantId: null,
-  editingAgent: null
+  editingAgent: null,
+  inspectEvents: [],
+  inspectCollapsed: false,
+  inspectDismissed: false
 };
 
 let knownJobStates = new Map();
@@ -197,17 +200,160 @@ function clearResponseDetails() {
   document.querySelector('.response-details')?.removeAttribute('open');
 }
 
+function resetInspectPanel() {
+  state.inspectEvents = [];
+  state.inspectCollapsed = false;
+  state.inspectDismissed = false;
+  renderInspectPanel();
+}
+
+function appendInspectEvent(event) {
+  if (state.inspectDismissed) return;
+
+  const item = inspectEventFromStream(event);
+  if (!item) return;
+
+  state.inspectEvents = [...state.inspectEvents, item].slice(-24);
+  renderInspectPanel();
+}
+
+function inspectEventFromStream(event) {
+  if (event.type === 'chunk' || event.type === 'task_graph') return null;
+  const runtimeEvent = event.payload?.runtimeEvent;
+  const kind = runtimeEvent?.kind ?? event.type;
+  const tool = runtimeEvent?.tool;
+  const result = runtimeEvent?.result;
+  const args = runtimeEvent?.arguments ?? {};
+  const target = toolTraceTarget(tool, args);
+  const preview = result ? toolResultPreview(result) : event.content;
+
+  return {
+    time: new Date().toLocaleTimeString(),
+    kind,
+    label: progressLabel(kind, tool),
+    status: progressStatus(kind),
+    target,
+    content: truncateMiddle(preview, 520)
+  };
+}
+
+function renderInspectPanel() {
+  let panel = $('inspectPanel');
+
+  if (state.inspectDismissed || state.inspectEvents.length === 0) {
+    panel?.remove();
+    return;
+  }
+
+  if (!panel) {
+    panel = document.createElement('section');
+    panel.id = 'inspectPanel';
+    panel.className = 'inspect-panel';
+    $('messages').appendChild(panel);
+  }
+
+  panel.classList.toggle('collapsed', state.inspectCollapsed);
+  const latest = state.inspectEvents.at(-1);
+  panel.innerHTML = `
+    <div class="inspect-head">
+      <span><strong>Live Inspect</strong><small>${escapeHtml(latest?.label ?? 'waiting')} · ${escapeHtml(latest?.status ?? 'active')}</small></span>
+      <div class="inspect-actions">
+        <button id="toggleInspect" type="button">${state.inspectCollapsed ? 'Expand' : 'Minimize'}</button>
+        <button id="closeInspect" type="button">Close</button>
+      </div>
+    </div>
+    ${state.inspectCollapsed ? '' : `<div class="inspect-log">${state.inspectEvents.map(renderInspectLogItem).join('')}</div>`}
+  `;
+  $('toggleInspect')?.addEventListener('click', () => {
+    state.inspectCollapsed = !state.inspectCollapsed;
+    renderInspectPanel();
+  });
+  $('closeInspect')?.addEventListener('click', () => {
+    state.inspectDismissed = true;
+    renderInspectPanel();
+  });
+  $('messages').scrollTop = $('messages').scrollHeight;
+}
+
+function renderInspectLogItem(item) {
+  return `
+    <div class="inspect-item ${escapeHtml(item.status)}">
+      <span class="inspect-time">${escapeHtml(item.time)}</span>
+      <span class="inspect-label">${escapeHtml(item.label)}</span>
+      <span class="inspect-content">${item.target ? `<code>${escapeHtml(item.target)}</code> ` : ''}${escapeHtml(item.content ?? '')}</span>
+    </div>
+  `;
+}
+
 function renderToolTraces(toolTraces) {
   $('toolTraces').innerHTML = toolTraces?.length
-    ? toolTraces.map(trace => `
-      <details class="tool-trace ${escapeHtml(trace.status ?? '')}">
-        <summary><strong>${escapeHtml(trace.tool)}</strong><span>${escapeHtml(trace.status ?? 'unknown')}${trace.durationMs ? ` · ${Math.round(trace.durationMs)}ms` : ''}</span></summary>
-        ${trace.arguments ? `<pre>args: ${escapeHtml(JSON.stringify(trace.arguments, null, 2))}</pre>` : ''}
-        ${trace.result ? `<pre>${escapeHtml(trace.result)}</pre>` : ''}
-        ${trace.error ? `<pre>${escapeHtml(trace.error)}</pre>` : ''}
-      </details>
-    `).join('')
+    ? toolTraces.map(renderToolTraceCard).join('')
     : '<p class="muted">No tool calls recorded for this message.</p>';
+}
+
+function renderToolTraceCard(trace) {
+  const status = trace.status ?? 'unknown';
+  const args = trace.arguments ?? {};
+  const target = toolTraceTarget(trace.tool, args);
+  const preview = trace.error || toolResultPreview(trace.result);
+  const duration = trace.durationMs ? `${Math.round(trace.durationMs)}ms` : null;
+  const meta = [status, duration, target].filter(Boolean).join(' · ');
+  const rawBlocks = [
+    trace.arguments ? ['Arguments', JSON.stringify(trace.arguments, null, 2)] : null,
+    trace.result ? ['Result', trace.result] : null,
+    trace.error ? ['Error', trace.error] : null
+  ].filter(Boolean);
+
+  return `
+    <details class="tool-trace ${escapeHtml(status)}">
+      <summary>
+        <span class="tool-trace-main"><strong>${escapeHtml(friendlyToolName(trace.tool))}</strong><small>${escapeHtml(meta || 'tool call')}</small></span>
+        <span class="status-pill ${escapeHtml(status)}">${escapeHtml(status)}</span>
+      </summary>
+      ${preview ? `<p class="tool-preview">${escapeHtml(preview)}</p>` : '<p class="tool-preview muted">No result preview.</p>'}
+      ${rawBlocks.length ? `<details class="raw-detail"><summary>Raw details</summary>${rawBlocks.map(([label, value]) => `<strong>${escapeHtml(label)}</strong><pre>${escapeHtml(value)}</pre>`).join('')}</details>` : ''}
+    </details>
+  `;
+}
+
+function friendlyToolName(tool) {
+  return String(tool ?? 'tool').replaceAll('_', ' ');
+}
+
+function toolTraceTarget(tool, args = {}) {
+  if (tool === 'web_browse' && args.url) return displayUrl(args.url);
+  if (tool === 'memory_search' && args.query) return `"${args.query}"`;
+  if (tool === 'delegate_to_agent' && args.agent) return args.agent;
+  if (tool === 'schedule_background_job' && args.kind) return args.kind;
+  if (args.path) return args.path;
+  if (args.folderPath) return args.folderPath;
+  return null;
+}
+
+function toolResultPreview(result) {
+  if (!result) return '';
+  const cleaned = String(result)
+    .replace(/^URL:\s*(\S+)\s*/i, 'Fetched $1. ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return truncateMiddle(cleaned, 460);
+}
+
+function displayUrl(value) {
+  try {
+    const url = new URL(value);
+    return `${url.hostname.replace(/^www\./, '')}${url.pathname === '/' ? '' : url.pathname}`;
+  } catch {
+    return String(value ?? '');
+  }
+}
+
+function truncateMiddle(value, maxLength = 220) {
+  const text = String(value ?? '');
+  if (text.length <= maxLength) return text;
+  const head = Math.ceil((maxLength - 1) * 0.68);
+  const tail = Math.floor((maxLength - 1) * 0.32);
+  return `${text.slice(0, head)}…${text.slice(-tail)}`;
 }
 
 function renderCitations(citations) {
@@ -852,29 +998,75 @@ async function loadBackgroundJobs() {
   state.backgroundJobs = await api('/background-jobs');
   await refreshCurrentSessionIfJobsCompleted(state.backgroundJobs);
   const recent = state.backgroundJobs.filter(job => job.sessionId === state.sessionId).slice(0, 8);
-  $('backgroundJobs').innerHTML = recent.map(job => {
-    const total = job.progressTotal || 0;
-    const current = job.progressCurrent || 0;
-    const percent = total > 0 ? Math.round((current / total) * 100) : 0;
-    const canCancel = job.status === 'queued' || job.status === 'running';
-    return `
-      <div class="background-job ${escapeHtml(job.status)}">
-        <div class="job-title"><strong>${escapeHtml(job.title ?? job.kind)}</strong><span>${escapeHtml(job.status)}</span></div>
-        <progress value="${escapeHtml(String(current))}" max="${escapeHtml(String(Math.max(total, current, 1)))}"></progress>
-        <span>${escapeHtml(total > 0 ? `${current}/${total} · ${percent}%` : 'waiting')}</span>
-        <p>${escapeHtml(job.statusMessage ?? '')}</p>
-        ${job.error ? `<em>${escapeHtml(job.error)}</em>` : ''}
-        <div class="job-artifacts" data-job-artifacts="${escapeHtml(job.id)}"></div>
-        ${canCancel ? `<button data-cancel-job="${escapeHtml(job.id)}" type="button">Cancel</button>` : ''}
-      </div>
-    `;
-  }).join('') || '<p class="muted">No background jobs for this session.</p>';
+  $('backgroundJobs').innerHTML = recent.map(renderBackgroundJobCard).join('') || '<p class="muted">No background jobs for this session.</p>';
 
   document.querySelectorAll('[data-cancel-job]').forEach(button => {
     button.addEventListener('click', () => cancelBackgroundJob(button.dataset.cancelJob));
   });
 
   recent.filter(job => job.status === 'completed').forEach(job => loadJobArtifacts(job.id).catch(() => {}));
+}
+
+function renderBackgroundJobCard(job) {
+  const total = job.progressTotal || 0;
+  const current = job.progressCurrent || 0;
+  const percent = total > 0 ? Math.min(100, Math.round((current / total) * 100)) : 0;
+  const canCancel = job.status === 'queued' || job.status === 'running';
+  const phase = jobPhase(job);
+  const summary = jobSummary(job);
+  const detailsOpen = job.status === 'running' || job.status === 'failed' ? ' open' : '';
+
+  return `
+    <details class="background-job ${escapeHtml(job.status)}"${detailsOpen}>
+      <summary>
+        <span class="job-main"><strong>${escapeHtml(job.title ?? job.kind)}</strong><small>${escapeHtml(job.kind)} · ${escapeHtml(shortId(job.id))}</small></span>
+        <span class="status-pill ${escapeHtml(job.status)}">${escapeHtml(job.status)}</span>
+      </summary>
+      <div class="job-progress-row">
+        <progress value="${escapeHtml(String(current))}" max="${escapeHtml(String(Math.max(total, current, 1)))}"></progress>
+        <span>${escapeHtml(total > 0 ? `${percent}%` : phase)}</span>
+      </div>
+      <p class="job-summary">${escapeHtml(summary)}</p>
+      ${job.error ? `<em>${escapeHtml(job.error)}</em>` : ''}
+      <div class="job-meta">
+        <span>${escapeHtml(phase)}</span>
+        <span>${escapeHtml(total > 0 ? `${current}/${total}` : 'no progress total')}</span>
+        <span>${escapeHtml(formatDateTime(job.updatedAt))}</span>
+      </div>
+      <div class="job-artifacts" data-job-artifacts="${escapeHtml(job.id)}"></div>
+      ${canCancel ? `<button data-cancel-job="${escapeHtml(job.id)}" type="button">Cancel job</button>` : ''}
+    </details>
+  `;
+}
+
+function jobPhase(job) {
+  if (job.status === 'queued') return 'queued';
+  if (job.status === 'completed') return 'complete';
+  if (job.status === 'failed') return 'failed';
+  if (job.status === 'cancelled') return 'cancelled';
+  const message = String(job.statusMessage ?? '').toLowerCase();
+  if (message.includes('synthes')) return 'synthesizing';
+  if (message.includes('brows')) return 'browsing';
+  if (message.includes('vector')) return 'vectorizing';
+  if (message.includes('ocr')) return 'reading';
+  return 'running';
+}
+
+function jobSummary(job) {
+  return truncateMiddle(job.statusMessage || job.result || job.error || 'Waiting for progress...', 260);
+}
+
+function shortId(value) {
+  return String(value ?? '').slice(0, 8);
+}
+
+function formatDateTime(value) {
+  if (!value) return 'unknown time';
+  try {
+    return new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(value));
+  } catch {
+    return String(value);
+  }
 }
 
 async function refreshCurrentSessionIfJobsCompleted(jobs) {
@@ -897,9 +1089,11 @@ async function loadJobArtifacts(jobId) {
   if (!container) return;
 
   const artifacts = await api(`/background-jobs/${jobId}/artifacts`);
-  container.innerHTML = artifacts.map(artifact => `
-    <button data-view-artifact="${escapeHtml(jobId)}:${escapeHtml(artifact.id)}" type="button">${escapeHtml(artifact.title)}</button>
-  `).join('');
+  container.innerHTML = artifacts.length
+    ? `<span>Artifacts</span>${artifacts.map(artifact => `
+      <button data-view-artifact="${escapeHtml(jobId)}:${escapeHtml(artifact.id)}" type="button">${escapeHtml(artifact.title)}</button>
+    `).join('')}`
+    : '';
   container.querySelectorAll('[data-view-artifact]').forEach(button => {
     button.addEventListener('click', () => viewArtifact(button.dataset.viewArtifact));
   });
@@ -914,7 +1108,7 @@ async function viewArtifact(value) {
   const content = await response.text();
   $('artifactViewer').hidden = false;
   $('artifactViewer').innerHTML = `
-    <div class="job-title"><strong>Artifact Preview</strong><button id="closeArtifact" type="button">Close</button></div>
+    <div class="artifact-head"><span><strong>Artifact Preview</strong><small>${escapeHtml(`${content.length} chars`)}</small></span><button id="closeArtifact" type="button">Close</button></div>
     <div class="markdown-body">${renderMarkdown(content)}</div>
   `;
   $('closeArtifact').addEventListener('click', () => { $('artifactViewer').hidden = true; });
@@ -1056,6 +1250,7 @@ async function sendMessage(event) {
     $('prompt').disabled = true;
     const existingMessages = documentMessages();
     renderMessages([...existingMessages, { role: 'user', content: message }, { role: 'assistant', content: '', draftId: state.activeAssistantId }]);
+    resetInspectPanel();
     setInlineProgress('Starting coordinator...');
 
     const result = await streamChat(`/sessions/${state.sessionId}/chat/stream`, {
@@ -1121,6 +1316,7 @@ async function streamChat(path, options) {
         }
 
         if (event.type === 'progress' && event.content) {
+          appendInspectEvent(event);
           progressHistory = [...progressHistory, formatProgressEvent(event)].slice(-6);
           setInlineProgress(progressHistory);
           if (event.payload?.graph) {
@@ -1173,8 +1369,28 @@ async function streamChat(path, options) {
 function formatProgressEvent(event) {
   const runtimeEvent = event.payload?.runtimeEvent;
   const tool = runtimeEvent?.tool;
-  const prefix = tool?.includes('/') ? tool.split('/').map(part => `[${part}]`).join(' ') + ' ' : '';
-  return `${prefix}${event.content}`;
+  const kind = runtimeEvent?.kind ?? 'progress';
+  const agentPrefix = tool?.includes('/') ? tool.split('/').slice(0, -1).map(part => `[${part}]`).join(' ') + ' ' : '';
+  const label = progressLabel(kind, tool);
+  return {
+    kind,
+    label,
+    content: `${agentPrefix}${event.content}`,
+    status: progressStatus(kind)
+  };
+}
+
+function progressLabel(kind, tool) {
+  if (tool) return friendlyToolName(tool.split('/').at(-1));
+  if (kind === 'model_started') return 'model';
+  return kind.replaceAll('_', ' ');
+}
+
+function progressStatus(kind) {
+  if (kind === 'tool_completed') return 'complete';
+  if (kind === 'tool_failed') return 'failed';
+  if (kind === 'tool_started' || kind === 'tool_progress') return 'running';
+  return 'active';
 }
 
 async function recoverFinalResponse() {
@@ -1244,7 +1460,7 @@ function activeAssistantElement(assistantMessages) {
 function setInlineProgress(content) {
   const messages = $('messages');
   let progress = $('inlineProgress');
-  const items = Array.isArray(content) ? content : [content || 'Thinking...'];
+  const items = (Array.isArray(content) ? content : [content || 'Thinking...']).map(normalizeProgressItem);
 
   if (!progress) {
     progress = document.createElement('div');
@@ -1253,8 +1469,24 @@ function setInlineProgress(content) {
     messages.appendChild(progress);
   }
 
-  progress.innerHTML = `<span class="inline-spinner"></span><div class="inline-progress-stack">${items.map((item, index) => `<span class="inline-progress-text ${index === items.length - 1 ? 'current' : ''}">${escapeHtml(item)}</span>`).join('')}</div>`;
+  progress.innerHTML = `<span class="inline-spinner"></span><div class="inline-progress-stack">${items.map((item, index) => `
+    <span class="inline-progress-step ${escapeHtml(item.status)} ${index === items.length - 1 ? 'current' : ''}">
+      <strong>${escapeHtml(item.label)}</strong><span>${escapeHtml(item.content)}</span>
+    </span>
+  `).join('')}</div>`;
   messages.scrollTop = messages.scrollHeight;
+}
+
+function normalizeProgressItem(item) {
+  if (typeof item === 'object' && item !== null) {
+    return {
+      label: item.label ?? 'progress',
+      content: item.content ?? '',
+      status: item.status ?? 'active'
+    };
+  }
+
+  return { label: 'progress', content: String(item ?? 'Thinking...'), status: 'active' };
 }
 
 function clearInlineProgress() {

@@ -34,7 +34,7 @@ public sealed class AgentDelegationTool(IServiceProvider serviceProvider, IOptio
         var response = await agentRuntime.RunAsync(new AgentRunRequest(
             Agent: arguments.Agent,
             Message: arguments.Message,
-            AllowTools: true,
+            AllowTools: arguments.AllowTools ?? true,
             ConversationId: invocation.ConversationId,
             DelegationDepth: invocation.DelegationDepth + 1,
             OnEvent: invocation.OnEvent is null
@@ -58,4 +58,4 @@ public sealed class AgentDelegationTool(IServiceProvider serviceProvider, IOptio
         invocation.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
 }
 
-public sealed record AgentDelegationArguments([property: Required] string Agent, [property: Required] string Message);
+public sealed record AgentDelegationArguments([property: Required] string Agent, [property: Required] string Message, bool? AllowTools = true);

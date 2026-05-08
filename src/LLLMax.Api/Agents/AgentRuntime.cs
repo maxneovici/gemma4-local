@@ -60,6 +60,7 @@ public sealed class AgentRuntime(
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
         var retriedRequiredSmartHomeTool = false;
         var retriedFreshnessBrowsing = false;
+        var delegatedNewsDigestSynthesis = false;
         var pendingFreshBrowseUrls = new Queue<string>();
         var browsedFreshUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         LocalChatResponse response = default!;
@@ -74,6 +75,15 @@ public sealed class AgentRuntime(
                 toolCall = CreateToolCall("web_browse", new Dictionary<string, string> { ["url"] = browseUrl });
                 response = new LocalChatResponse(route.Model, ToolCallToJson(toolCall), null, null, null);
                 reasoningSteps.Add(new ReasoningStep("forced_tool_call", $"web_browse: {browseUrl}", DateTimeOffset.UtcNow));
+            }
+            else if (request.AllowTools
+                && !delegatedNewsDigestSynthesis
+                && ShouldDelegateNewsDigestSynthesis(agent, request, toolResults, pendingFreshBrowseUrls.Count))
+            {
+                delegatedNewsDigestSynthesis = true;
+                toolCall = CreateNewsDigestDelegationCall(request.Message, toolResults);
+                response = new LocalChatResponse(route.Model, ToolCallToJson(toolCall), null, null, null);
+                reasoningSteps.Add(new ReasoningStep("forced_tool_call", "delegate_to_agent: deep_researcher for latest-news synthesis", DateTimeOffset.UtcNow));
             }
             else if (ShouldUseNativeToolCalling(request.AllowTools, allowedTools))
             {
@@ -175,6 +185,20 @@ public sealed class AgentRuntime(
                 break;
             }
 
+            if (toolCall.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)
+                && TryGetStringArgument(toolCall.Arguments, "url") is { Length: > 0 } requestedBrowseUrl
+                && HasBrowsedUrl(browsedFreshUrls, requestedBrowseUrl))
+            {
+                reasoningSteps.Add(new ReasoningStep("tool_retry", $"Skipped duplicate web_browse for {requestedBrowseUrl}.", DateTimeOffset.UtcNow));
+                messages = AppendToolResult(
+                    messages,
+                    response.Response,
+                    "web_browse",
+                    $"URL already browsed in this turn: {requestedBrowseUrl}. Use the existing web_browse result; do not fetch the same URL again.",
+                    RequiresFreshBrowsing(request.Message));
+                continue;
+            }
+
             if (iteration == maxIterations)
             {
                 reasoningSteps.Add(new ReasoningStep("completion", "Stopped because the tool iteration budget was reached.", DateTimeOffset.UtcNow));
@@ -259,12 +283,16 @@ public sealed class AgentRuntime(
             toolResults.Add(new ToolExecutionResult(tool.Name, result.Content));
             reasoningSteps.Add(new ReasoningStep("tool_result", result.Content, DateTimeOffset.UtcNow));
             var toolResultForPrompt = result.Content;
+            var completeAfterTool = delegatedNewsDigestSynthesis
+                && tool.Name.Equals("delegate_to_agent", StringComparison.OrdinalIgnoreCase)
+                && TryGetStringArgument(toolCall.Arguments, "agent")?.Equals("deep_researcher", StringComparison.OrdinalIgnoreCase) == true;
 
             if (RequiresFreshBrowsing(request.Message) && tool.Name.Equals("web_browse", StringComparison.OrdinalIgnoreCase))
             {
                 if (traceArguments.TryGetValue("url", out var browsedUrl) && !string.IsNullOrWhiteSpace(browsedUrl))
                 {
                     browsedFreshUrls.Add(browsedUrl);
+                    AddBrowsedUrl(browsedFreshUrls, browsedUrl);
                 }
             }
 
@@ -295,6 +323,14 @@ public sealed class AgentRuntime(
                 Content: DescribeToolCompleted(tool.Name),
                 Tool: tool.Name,
                 Result: result.Content), cancellationToken);
+
+            if (completeAfterTool)
+            {
+                response = response with { Response = result.Content };
+                reasoningSteps.Add(new ReasoningStep("completion", "Using deep_researcher synthesis as final news digest.", DateTimeOffset.UtcNow));
+                break;
+            }
+
             messages = AppendToolResult(messages, response.Response, tool.Name, toolResultForPrompt, RequiresFreshBrowsing(request.Message));
         }
 
@@ -409,7 +445,7 @@ Local-first constraints:
 
 Model orchestration:
 - The coordinator model owns routine planning, tool selection, smart-home commands, memory lookups, web browsing, and short summarization.
-- Use regular tools or the researcher agent for routine daily updates, news headline summaries, subreddit checks, and user-interest based browsing.
+- Use regular tools for routine daily updates, news headline browsing, subreddit checks, and user-interest based browsing. For latest-news digest synthesis after browsing, delegate to deep_researcher so the slow model handles only final synthesis.
 - Delegate to deep_researcher only for bounded work that genuinely needs the slower large model, such as dense multi-document synthesis, complex cross-source analysis, or high-stakes report writing.
 
 Personal context and freshness rules:
@@ -417,6 +453,9 @@ Personal context and freshness rules:
 - If memory identifies URLs, domains, APIs, documents, or other targets and the user asks to check, fetch, research, summarize, update, compare, or verify current information, continue with the appropriate tool such as web_browse after memory_search.
 - Do not stop after restating remembered targets when the user asked you to act on them. Use the remembered targets to continue the task unless a required target is still missing.
 - For current news, latest headlines, Reddit reactions, or today's updates, never answer from memory alone. Use memory only to find preferred sources or interests, then call web_browse on concrete URLs and summarize only browsed content.
+- For news summaries, do not give generic topic buckets. Extract concrete article/headline candidates from each browsed source, then summarize 2-4 specific items per source with what happened and why it matters. Group by source when multiple sites are browsed, and include a source URL citation for each group or item.
+- If the user asks to summarize news by category across multiple sources, use this structure: source heading (DN/Aftonbladet/SVT), then category bullets under that source. Do not merge all sources into one category list, and do not omit a browsed source unless its page was blocked or empty.
+- For category news summaries, keep at most 3 category bullets under each source, use one distinct headline/story per bullet, and never repeat the same headline/story under the same source. If there are fewer reliable items, provide fewer bullets.
 - For Reddit requests, infer the appropriate subreddit URL from the user's wording and use web_browse. If Reddit returns a verification, login, or app wall, follow the web_browse tool guidance and try an appropriate public listing URL such as /r/<subreddit>/top/?t=day or old.reddit.com before reporting that browsing is blocked.
 - Build a durable local profile of the user over time. When the user shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project.
 - Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
@@ -425,6 +464,7 @@ Personal context and freshness rules:
 
 Skill instructions:
 - Skills are local markdown procedures selected for this turn. Follow relevant skills when they apply.
+- Skills are not tools and must never be called by name. Do not emit tool calls named after skills such as latest_news_digest or web_research.
 - Skills guide behavior, but they never override local-only constraints, tool allowlists, approval requirements, citations, or the user's explicit request.
 - If a useful workflow is missing or the user asks you to remember a workflow, use create_skill when available to create an approval-gated local markdown skill.
 - If an existing skill should change, use update_skill when available instead of generic workspace writes.
@@ -499,7 +539,7 @@ Loop guardrails:
         bool enforceFreshBrowsingRules = false)
     {
         var nextInstruction = enforceFreshBrowsingRules && toolName.Equals("web_browse", StringComparison.OrdinalIgnoreCase)
-            ? "Continue the task. For current/fresh information, use only web_browse results as factual source material. memory_search results may identify which sources to browse, but do not use memory-only headlines, summaries, dates, or claims in the final answer. Emit another JSON tool call only if more browsing is required; otherwise provide the final answer."
+            ? "Continue the task. For current/fresh information, use only web_browse results as factual source material. memory_search results may identify which sources to browse, but do not use memory-only headlines, summaries, dates, or claims in the final answer. For news, summarize concrete article/headline candidates per source with what happened and why it matters, and cite the browsed source URL. If the user asks for categories across multiple sources, structure the final answer by source first, then category under each source; do not merge all sources into one category list. Keep at most 3 category bullets per source, do not repeat the same story under a source, and skip uncertain/repeated items instead of padding. Emit another JSON tool call only if more browsing is required; otherwise provide the final answer."
             : "Continue the task. Emit another JSON tool call only if more tool work is required; otherwise provide the final answer.";
 
         return
@@ -539,6 +579,68 @@ Loop guardrails:
             && ContainsAny(lower, "site", "sites", "website", "websites", "source", "sources", "reddit", "news", "headline", "headlines", "reaction", "reactions", "favorite");
     }
 
+    private static bool RequiresPersonalContextLookup(string message)
+    {
+        var lower = message.ToLowerInvariant();
+        return ContainsAny(lower, "my", "mine", "favorite", "usual", "preferred", "remember", "from before");
+    }
+
+    private static bool RequiresNewsDigest(string message)
+    {
+        var lower = message.ToLowerInvariant();
+        return ContainsAny(lower, "news", "headline", "headlines", "latest")
+            && ContainsAny(lower, "summarize", "summary", "digest", "get", "check", "category", "categories", "favorite");
+    }
+
+    private static bool ShouldDelegateNewsDigestSynthesis(
+        AgentDefinition agent,
+        AgentRunRequest request,
+        IReadOnlyList<ToolExecutionResult> toolResults,
+        int pendingFreshBrowseCount) =>
+        request.DelegationDepth == 0
+        && agent.AllowedAgents?.Contains("deep_researcher", StringComparer.OrdinalIgnoreCase) == true
+        && IsToolAllowed(agent, "delegate_to_agent")
+        && RequiresNewsDigest(request.Message)
+        && pendingFreshBrowseCount == 0
+        && toolResults.Count(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)) >= 1
+        && !toolResults.Any(result => result.Tool.Equals("delegate_to_agent", StringComparison.OrdinalIgnoreCase));
+
+    private static ParsedToolCall CreateNewsDigestDelegationCall(string originalMessage, IReadOnlyList<ToolExecutionResult> toolResults)
+    {
+        var browsedSources = toolResults
+            .Where(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase))
+            .Select(result => result.Result)
+            .ToList();
+        var sourceBundle = string.Join("\n\n---\n\n", browsedSources);
+        var message = $"""
+Create the final user-facing latest-news digest from the browsed source bundle below.
+
+Original user request:
+{originalMessage}
+
+Rules:
+- Use only the browsed source bundle as current factual evidence.
+- If multiple sources are present, structure source-first: one heading per source/domain.
+- Under each source, group by category with at most 3 bullets.
+- Each bullet must be one distinct concrete headline/story, with what happened and why it matters in one concise sentence.
+- Do not repeat the same story under the same source. Do not pad with uncertain or generic items.
+- Include the source URL beside each source heading or bullet.
+- Keep the answer concise and do not mention internal tools or delegation.
+
+Browsed source bundle:
+{sourceBundle}
+""";
+
+        var arguments = new Dictionary<string, JsonElement>
+        {
+            ["agent"] = JsonSerializer.SerializeToElement("deep_researcher"),
+            ["message"] = JsonSerializer.SerializeToElement(message),
+            ["allowTools"] = JsonSerializer.SerializeToElement(false)
+        };
+
+        return new ParsedToolCall("delegate_to_agent", arguments);
+    }
+
     private static IReadOnlyList<string> ExtractFreshBrowseUrls(string memoryResult, string originalMessage) =>
         ExtractBrowseTargets(memoryResult, skipMemoryMetadataLines: true)
             .Concat(InferFreshBrowseUrls(originalMessage))
@@ -570,6 +672,15 @@ Loop guardrails:
         var path = uri.AbsolutePath == "/" ? string.Empty : uri.AbsolutePath.TrimEnd('/');
 
         return $"{host.ToLowerInvariant()}{path.ToLowerInvariant()}";
+    }
+
+    private static bool HasBrowsedUrl(ISet<string> browsedUrls, string url) =>
+        browsedUrls.Contains(url) || browsedUrls.Contains(CanonicalBrowseTargetKey(url));
+
+    private static void AddBrowsedUrl(ISet<string> browsedUrls, string url)
+    {
+        browsedUrls.Add(url);
+        browsedUrls.Add(CanonicalBrowseTargetKey(url));
     }
 
     private static IEnumerable<string> ExtractBrowseTargets(string text, bool skipMemoryMetadataLines)
@@ -836,6 +947,19 @@ Loop guardrails:
 
     private static ParsedToolCall NormalizeToolCall(AgentDefinition agent, ParsedToolCall toolCall, string fallbackMessage)
     {
+        if (toolCall.Tool.Equals("latest_news_digest", StringComparison.OrdinalIgnoreCase))
+        {
+            if (RequiresPersonalContextLookup(fallbackMessage) && IsToolAllowed(agent, "memory_search"))
+            {
+                return CreateToolCall("memory_search", new Dictionary<string, string> { ["query"] = "favorite news sources" });
+            }
+
+            if (IsToolAllowed(agent, "memory_search"))
+            {
+                return CreateToolCall("memory_search", new Dictionary<string, string> { ["query"] = fallbackMessage });
+            }
+        }
+
         if (toolCall.Tool.Equals("web_research", StringComparison.OrdinalIgnoreCase))
         {
             var firstUrl = TryGetStringArgument(toolCall.Arguments, "url")
