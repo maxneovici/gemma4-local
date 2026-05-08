@@ -96,6 +96,7 @@ public sealed class DocumentService(
         var chunks = 0;
         var skippedFiles = 0;
         var filesProcessed = 0;
+        var collection = string.IsNullOrWhiteSpace(request.Collection) ? MemoryLayers.Knowledge : request.Collection.Trim();
 
         foreach (var file in files)
         {
@@ -104,7 +105,7 @@ public sealed class DocumentService(
             var contentHash = ContentHash(text);
             var relativePath = Path.GetRelativePath(folder, file);
 
-            if (await IsAlreadyVectorizedAsync(request.Collection, contentHash, cancellationToken))
+            if (await IsAlreadyVectorizedAsync(collection, contentHash, cancellationToken))
             {
                 skippedFiles++;
                 filesProcessed++;
@@ -135,7 +136,7 @@ public sealed class DocumentService(
 
             if (items.Count > 0)
             {
-                var response = await memoryStore.UpsertBatchAsync(new MemoryBatchUpsertRequest(request.Collection, items), cancellationToken);
+                var response = await memoryStore.UpsertBatchAsync(new MemoryBatchUpsertRequest(collection, items), cancellationToken);
                 chunks += response.Ids.Count;
             }
 
@@ -152,7 +153,7 @@ public sealed class DocumentService(
             }
         }
 
-        return new DocumentVectorizeResponse(request.Collection, files.Count, chunks, skippedFiles);
+        return new DocumentVectorizeResponse(collection, files.Count, chunks, skippedFiles);
     }
 
     public async Task<OcrResponse> ExtractTextAsync(OcrRequest request, CancellationToken cancellationToken)
@@ -163,13 +164,13 @@ public sealed class DocumentService(
         var response = await VisionChatAsync(model, prompt, imageBase64, cancellationToken);
 
         await memoryStore.UpsertAsync(new MemoryUpsertRequest(
-            Collection: "documents",
+            Collection: MemoryLayers.Knowledge,
             Text: response.Message?.Content ?? string.Empty,
-            Metadata: new Dictionary<string, string>
+            Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
             {
                 ["source"] = file,
                 ["kind"] = "ocr"
-            }), cancellationToken);
+            }, MemoryLayers.Knowledge)), cancellationToken);
 
         return new OcrResponse(request.DocumentId, response.Message?.Content ?? string.Empty, response.Model);
     }
@@ -183,13 +184,13 @@ public sealed class DocumentService(
         var json = response.Message?.Content ?? string.Empty;
 
         await memoryStore.UpsertAsync(new MemoryUpsertRequest(
-            Collection: "invoices",
+            Collection: MemoryLayers.Knowledge,
             Text: json,
-            Metadata: new Dictionary<string, string>
+            Metadata: MemoryLayers.WithLayer(new Dictionary<string, string>
             {
                 ["source"] = file,
                 ["kind"] = "invoice_extraction"
-            }), cancellationToken);
+            }, MemoryLayers.Knowledge)), cancellationToken);
 
         return new InvoiceExtractionResponse(request.DocumentId, json, response.Model);
     }
@@ -284,18 +285,16 @@ public sealed class DocumentService(
     {
         var relativePath = Path.GetRelativePath(folder, file);
         var relativeDirectory = Path.GetDirectoryName(relativePath);
-        var metadata = new Dictionary<string, string>(request.Metadata ?? new Dictionary<string, string>(), StringComparer.OrdinalIgnoreCase)
-        {
-            ["source"] = file,
-            ["sourceFile"] = Path.GetFileName(file),
-            ["sourceRelativePath"] = relativePath,
-            ["sourceDirectory"] = string.IsNullOrWhiteSpace(relativeDirectory) ? "." : relativeDirectory,
-            ["contentHash"] = contentHash,
-            ["chunkIndex"] = chunkIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["chunkCount"] = chunkCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["kind"] = "document_chunk",
-            ["observedAt"] = DateTimeOffset.UtcNow.ToString("O")
-        };
+        var metadata = MemoryLayers.WithLayer(request.Metadata, MemoryLayers.Knowledge);
+        metadata["source"] = file;
+        metadata["sourceFile"] = Path.GetFileName(file);
+        metadata["sourceRelativePath"] = relativePath;
+        metadata["sourceDirectory"] = string.IsNullOrWhiteSpace(relativeDirectory) ? "." : relativeDirectory;
+        metadata["contentHash"] = contentHash;
+        metadata["chunkIndex"] = chunkIndex.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        metadata["chunkCount"] = chunkCount.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        metadata["kind"] = "document_chunk";
+        metadata["observedAt"] = DateTimeOffset.UtcNow.ToString("O");
 
         if (!string.IsNullOrWhiteSpace(request.Tenant))
         {

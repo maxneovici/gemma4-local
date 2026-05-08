@@ -25,6 +25,8 @@ const state = {
   isStreaming: false,
   activeAssistantId: null,
   editingAgent: null,
+  profileMode: 'edit',
+  profileStep: 0,
   inspectEvents: [],
   inspectCollapsed: true,
   inspectDismissed: false
@@ -75,7 +77,25 @@ function setStatus(text, kind = 'ok') {
 
 function setWorking(isWorking, label = '') {
   $('workOverlay').hidden = !isWorking;
+  $('workAssistantName').textContent = `${assistantDisplayName()} is working`;
   $('workLabel').textContent = label;
+}
+
+function assistantDisplayName() {
+  return state.foundationProfile?.assistantName?.trim() || 'LLLMax';
+}
+
+function assistantDisplayDescription() {
+  return state.foundationProfile?.assistantDescription?.trim() || 'Frontier local assistant';
+}
+
+function renderAssistantIdentity() {
+  const name = assistantDisplayName();
+  $('assistantBrandName').textContent = name;
+  $('assistantBrandDescription').textContent = assistantDisplayDescription();
+  $('workAssistantName').textContent = `${name} is working`;
+  $('prompt').placeholder = `Ask ${name} to research, route, extract, summarize, or use a scoped tool...`;
+  document.title = name;
 }
 
 function renderMessages(messages) {
@@ -724,6 +744,8 @@ async function loadMemoryStats() {
 function renderFoundationProfile(profile, memoryProfile) {
   if (!$('foundationProfileForm')) return;
 
+  $('profileAssistantName').value = profile?.assistantName ?? '';
+  $('profileAssistantDescription').value = profile?.assistantDescription ?? '';
   $('profileUsername').value = profile?.username ?? '';
   $('profileEmail').value = profile?.email ?? '';
   $('profileFullName').value = profile?.fullName ?? '';
@@ -736,12 +758,72 @@ function renderFoundationProfile(profile, memoryProfile) {
   $('profileConstraints').value = profile?.constraints ?? '';
   $('profileDetails').value = profile?.details ?? '';
   $('profileFacts').value = profile?.facts ?? '';
+  renderAssistantIdentity();
+  renderProfileMode();
 
   void memoryProfile;
 }
 
+function hasFoundationProfile(profile) {
+  return Boolean(profile && [
+    profile.username,
+    profile.email,
+    profile.fullName,
+    profile.assistantName,
+    profile.assistantDescription,
+    profile.familyAndRelations,
+    profile.work,
+    profile.location,
+    profile.communicationStyle,
+    profile.interests,
+    profile.goals,
+    profile.constraints,
+    profile.details,
+    profile.facts
+  ].some(value => String(value ?? '').trim()));
+}
+
+function profileSteps() {
+  return [...document.querySelectorAll('[data-profile-step]')];
+}
+
+function renderProfileMode() {
+  const steps = profileSteps();
+  const isOnboarding = state.profileMode === 'onboarding';
+  const activeStep = Math.max(0, Math.min(state.profileStep, steps.length - 1));
+  state.profileStep = activeStep;
+  $('foundationProfileForm').classList.toggle('onboarding-mode', isOnboarding);
+  $('profileWizardSteps').hidden = !isOnboarding;
+  $('profilePreviousStep').hidden = !isOnboarding || activeStep === 0;
+  $('profileNextStep').hidden = !isOnboarding || activeStep === steps.length - 1;
+  $('saveFoundationProfile').hidden = isOnboarding && activeStep !== steps.length - 1;
+  $('saveFoundationProfile').textContent = isOnboarding && activeStep === steps.length - 1 ? 'Finish setup' : 'Save profile';
+  $('cancelProfileModal').textContent = isOnboarding ? 'Skip for now' : 'Cancel';
+  $('profileModalTitle').textContent = isOnboarding ? 'Set Up Your Local Assistant' : 'My Profile';
+
+  if (isOnboarding) {
+    const step = steps[activeStep];
+    $('profileModalSubtitle').textContent = step?.dataset.profileStepDescription ?? 'Profile data is injected into every turn.';
+    $('profileWizardSteps').innerHTML = steps.map((item, index) => `
+      <span class="${index === activeStep ? 'active' : index < activeStep ? 'complete' : ''}">${escapeHtml(item.dataset.profileStepTitle ?? `Step ${index + 1}`)}</span>
+    `).join('');
+  } else {
+    $('profileModalSubtitle').textContent = 'Explicit settings injected before learned memory.';
+    $('profileWizardSteps').innerHTML = '';
+  }
+
+  steps.forEach((step, index) => {
+    step.hidden = isOnboarding && index !== activeStep;
+  });
+}
+
 async function saveFoundationProfile(event) {
   event.preventDefault();
+  if (state.profileMode === 'onboarding' && state.profileStep < profileSteps().length - 1) {
+    nextProfileStep();
+    return;
+  }
+
   await guarded(async () => {
     const saved = await api('/user-profile/', {
       method: 'PUT',
@@ -749,6 +831,8 @@ async function saveFoundationProfile(event) {
         username: $('profileUsername').value,
         email: $('profileEmail').value,
         fullName: $('profileFullName').value,
+        assistantName: $('profileAssistantName').value,
+        assistantDescription: $('profileAssistantDescription').value,
         familyAndRelations: $('profileFamilyAndRelations').value,
         work: $('profileWork').value,
         location: $('profileLocation').value,
@@ -762,18 +846,38 @@ async function saveFoundationProfile(event) {
     });
     state.foundationProfile = saved;
     renderFoundationProfile(saved, state.memoryProfile);
+    renderAssistantIdentity();
     closeProfileModal();
   }, 'Saving profile...', { overlay: false });
 }
 
-function openProfileModal() {
+function openProfileModal(mode = 'edit') {
+  state.profileMode = mode;
+  state.profileStep = 0;
   renderFoundationProfile(state.foundationProfile, state.memoryProfile);
   $('profileModal').hidden = false;
-  $('profileFullName').focus();
+  if (mode === 'onboarding') {
+    ($('profileAssistantName').value ? $('profileAssistantDescription') : $('profileAssistantName')).focus();
+  } else {
+    $('profileFullName').focus();
+  }
 }
 
 function closeProfileModal() {
   $('profileModal').hidden = true;
+  state.profileMode = 'edit';
+  state.profileStep = 0;
+  renderProfileMode();
+}
+
+function nextProfileStep() {
+  state.profileStep = Math.min(state.profileStep + 1, profileSteps().length - 1);
+  renderProfileMode();
+}
+
+function previousProfileStep() {
+  state.profileStep = Math.max(state.profileStep - 1, 0);
+  renderProfileMode();
 }
 
 function renderMemoryDashboard(stats, profile) {
@@ -1195,6 +1299,32 @@ async function deleteAllSessions() {
     await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs()]);
     await newSession();
   }, 'Deleting sessions...');
+}
+
+async function resetEverything() {
+  const confirmation = prompt('This deletes all local sessions, profile rows, jobs, documents, integrations, and vector memory. Type RESET EVERYTHING to continue.');
+  if (confirmation !== 'RESET EVERYTHING') return;
+
+  await guarded(async () => {
+    const result = await api('/memory/reset-everything', {
+      method: 'POST',
+      body: JSON.stringify({ confirm: confirmation })
+    });
+    state.sessionId = null;
+    state.draftSession = null;
+    state.foundationProfile = null;
+    state.memoryProfile = null;
+    knownJobStates = new Map();
+    $('sessionTitle').textContent = 'Ready';
+    $('memoryResults').textContent = `Reset complete. Deleted ${result.deletedCollectionCount} vector collections and ${result.deletedSqliteRows} SQLite rows.`;
+    $('artifactViewer').hidden = true;
+    renderMessages([]);
+    clearResponseDetails();
+    await Promise.all([loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers(), loadTools(), loadSkills()]);
+    await newSession();
+    $('memoryResults').textContent = `Reset complete. Deleted ${result.deletedCollectionCount} vector collections and ${result.deletedSqliteRows} SQLite rows.`;
+    openProfileModal('onboarding');
+  }, 'Resetting local data...');
 }
 
 async function openSession(id) {
@@ -1786,9 +1916,11 @@ $('runOcr').addEventListener('click', () => runDocumentAction('/documents/ocr'))
 $('extractInvoice').addEventListener('click', () => runDocumentAction('/documents/extract-invoice'));
 $('discoverApi').addEventListener('click', discoverApi);
 $('foundationProfileForm').addEventListener('submit', saveFoundationProfile);
-$('openProfileModal').addEventListener('click', openProfileModal);
+$('openProfileModal').addEventListener('click', () => openProfileModal('edit'));
 $('closeProfileModal').addEventListener('click', closeProfileModal);
 $('cancelProfileModal').addEventListener('click', closeProfileModal);
+$('profileNextStep').addEventListener('click', nextProfileStep);
+$('profilePreviousStep').addEventListener('click', previousProfileStep);
 $('profileModal').addEventListener('click', event => {
   if (event.target.id === 'profileModal') closeProfileModal();
 });
@@ -1801,6 +1933,7 @@ $('closeOperationsStage').addEventListener('click', closeOperationsStage);
 $('addMemory').addEventListener('click', addMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
 $('reflectMemory').addEventListener('click', reflectMemory);
+$('resetEverything').addEventListener('click', resetEverything);
 $('registerMcp').addEventListener('click', registerMcp);
 $('saveAgentPrompt').addEventListener('click', saveAgentPrompt);
 $('resetAgentPrompt').addEventListener('click', resetAgentPrompt);
@@ -1819,10 +1952,14 @@ clearResponseDetails();
 await guarded(async () => {
   await Promise.all([loadModels(), loadAgents(), loadTools(), loadSkills(), loadSessions(), loadMemoryStats(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
   renderRuntime(await api('/health'));
+  const shouldOnboard = !hasFoundationProfile(state.foundationProfile);
   if (state.sessions.length > 0) {
     await openSession(state.sessions[0].id);
   } else {
     await newSession();
+  }
+  if (shouldOnboard) {
+    openProfileModal('onboarding');
   }
 }, 'Bootstrapping local runtime...');
 

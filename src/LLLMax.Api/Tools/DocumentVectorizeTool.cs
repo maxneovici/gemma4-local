@@ -1,6 +1,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Text.Json;
 using LLLMax.Api.Documents;
+using LLLMax.Api.Memory;
 
 namespace LLLMax.Api.Tools;
 
@@ -8,13 +9,13 @@ public sealed class DocumentVectorizeTool(IDocumentService documentService) : Lo
 {
     public override string Name => "document_vectorize_folder";
 
-    public override string Description => "Vectorize all supported text documents in an approved local folder into persistent local memory.";
+    public override string Description => "Vectorize all supported text documents in an approved local folder into persistent local knowledge.";
 
     protected override async Task<LocalToolResult> InvokeAsync(DocumentVectorizeArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
         var response = await documentService.VectorizeFolderAsync(new DocumentVectorizeRequest(
             FolderPath: arguments.FolderPath,
-            Collection: arguments.Collection ?? "documents",
+            Collection: arguments.Collection ?? MemoryLayers.Knowledge,
             SearchPattern: arguments.SearchPattern ?? "*.*",
             Tenant: arguments.Tenant,
             Category: arguments.Category,

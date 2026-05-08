@@ -27,7 +27,9 @@ public static class ToolCallParser
 
             var arguments = root.TryGetProperty("arguments", out var argumentsElement)
                 ? JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(argumentsElement.GetRawText()) ?? []
-                : [];
+                : root.EnumerateObject()
+                    .Where(property => !property.NameEquals("tool") && !property.NameEquals("tool_name"))
+                    .ToDictionary(property => property.Name, property => property.Value.Clone());
 
             toolCall = new ParsedToolCall(tool, arguments);
             return true;

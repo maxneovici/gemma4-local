@@ -63,6 +63,10 @@ public sealed class UserProfileEntity
 
     public string FullName { get; set; } = string.Empty;
 
+    public string AssistantName { get; set; } = string.Empty;
+
+    public string AssistantDescription { get; set; } = string.Empty;
+
     public string FamilyAndRelations { get; set; } = string.Empty;
 
     public string Work { get; set; } = string.Empty;

@@ -91,6 +91,10 @@ public sealed class LocalMemoryOptions
     public string StorageDirectory { get; init; } = "memory";
 
     public string QdrantBaseUrl { get; init; } = "http://127.0.0.1:6333";
+
+    public bool RecallPlanningEnabled { get; init; } = true;
+
+    public bool RecallRerankingEnabled { get; init; } = true;
 }
 
 public sealed class LocalToolOptions

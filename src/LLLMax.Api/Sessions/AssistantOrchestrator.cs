@@ -442,7 +442,7 @@ public sealed class AssistantOrchestrator(
             return;
         }
 
-        var payload = JsonSerializer.SerializeToElement(new Memory.MemoryConsolidationRequest(sessionId, Collection: "core"));
+        var payload = JsonSerializer.SerializeToElement(new Memory.MemoryConsolidationRequest(sessionId));
         await backgroundJobs.EnqueueAsync(new BackgroundJobCreateRequest(
             Kind: BackgroundJobKinds.MemoryConsolidation,
             Payload: payload,

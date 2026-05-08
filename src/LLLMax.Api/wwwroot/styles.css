@@ -191,13 +191,18 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .runtime-pill span, .metric span { display: block; color: var(--muted); font-size: 0.7rem; }
 .runtime-pill strong, .metric strong { display: block; margin-top: 0.2rem; font-size: 0.98rem; }
 .panel-help { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
-#reflectMemory { width: 100%; margin-top: 0.55rem; }
+#reflectMemory, #resetEverything { width: 100%; margin-top: 0.55rem; }
 .foundation-profile, .my-profile { display: grid; gap: 0.65rem; }
 .foundation-profile { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.profile-step { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.65rem; }
 .foundation-profile label { display: grid; gap: 0.35rem; color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
-.foundation-profile label.wide, .profile-modal-actions.wide { grid-column: 1 / -1; }
+.foundation-profile label.wide, .foundation-profile .wide, .profile-modal-actions.wide { grid-column: 1 / -1; }
 .foundation-profile input, .foundation-profile textarea, .foundation-profile button { width: 100%; }
 .foundation-profile textarea { min-height: 0; font-size: 0.78rem; line-height: 1.45; text-transform: none; letter-spacing: 0; }
+.profile-wizard-steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.42rem; margin-bottom: 0.25rem; }
+.profile-wizard-steps span { padding: 0.45rem 0.5rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: rgba(8, 8, 9, 0.45); font-size: 0.62rem; text-align: center; text-transform: uppercase; letter-spacing: 0.06em; }
+.profile-wizard-steps span.active { border-color: rgba(56, 189, 248, 0.52); color: var(--accent); background: rgba(56, 189, 248, 0.08); }
+.profile-wizard-steps span.complete { border-color: rgba(20, 184, 166, 0.32); color: var(--accent-2); }
 .quality-head { display: flex; justify-content: space-between; gap: 0.5rem; }
 .quality-head span { display: grid; gap: 0.1rem; }
 .quality-head strong { color: var(--accent); font-size: 0.76rem; }
@@ -436,7 +441,7 @@ pre { overflow: auto; max-height: 170px; color: #cfcfcf; font-size: 0.72rem; }
   .chat-card { height: 78vh; min-height: 520px; }
   .chat-header, .composer { grid-template-columns: 1fr; flex-direction: column; align-items: stretch; }
   .right-panel { display: block; }
-  .foundation-profile, .dashboard-hero, .dashboard-grid { grid-template-columns: 1fr; }
+  .foundation-profile, .profile-step, .profile-wizard-steps, .dashboard-hero, .dashboard-grid { grid-template-columns: 1fr; }
   .dashboard-grid article.wide { grid-column: auto; }
   .dashboard-graph-canvas { min-height: 520px; }
   .modal-overlay { align-items: stretch; padding: 0.55rem; }

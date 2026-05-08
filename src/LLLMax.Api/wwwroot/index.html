@@ -13,7 +13,7 @@
   <div id="workOverlay" class="work-overlay" hidden>
     <div class="work-card">
       <div class="pulse-dot"></div>
-      <strong>LLLMax is working</strong>
+      <strong id="workAssistantName">LLLMax is working</strong>
       <span id="workLabel">Thinking...</span>
     </div>
   </div>
@@ -46,26 +46,39 @@
       <header class="modal-head profile-modal-head">
         <div>
           <p class="eyebrow">Foundation profile</p>
-          <h2>My Profile</h2>
-          <p>Explicit settings injected before learned memory.</p>
+          <h2 id="profileModalTitle">My Profile</h2>
+          <p id="profileModalSubtitle">Explicit settings injected before learned memory.</p>
         </div>
         <button id="closeProfileModal" type="button" aria-label="Close profile">X</button>
       </header>
       <div class="modal-body profile-modal-body">
         <form id="foundationProfileForm" class="foundation-profile">
-          <label><span>Username</span><input id="profileUsername" placeholder="max"></label>
-          <label><span>Email</span><input id="profileEmail" type="email" placeholder="you@example.com"></label>
-          <label class="wide"><span>Full name</span><input id="profileFullName" placeholder="Max Falk"></label>
-          <label class="wide"><span>Family & relations</span><textarea id="profileFamilyAndRelations" rows="4" placeholder="family, household, close relations, pets..."></textarea></label>
-          <label class="wide"><span>Work</span><textarea id="profileWork" rows="3" placeholder="job, projects, responsibilities, work preferences..."></textarea></label>
-          <label><span>Location</span><input id="profileLocation" placeholder="city, neighborhood, timezone..."></label>
-          <label><span>Communication style</span><input id="profileCommunicationStyle" placeholder="direct, concise, detailed..."></label>
-          <label class="wide"><span>Interests</span><textarea id="profileInterests" rows="3" placeholder="music, games, food, sports, research areas..."></textarea></label>
-          <label class="wide"><span>Goals</span><textarea id="profileGoals" rows="3" placeholder="near-term and long-term goals..."></textarea></label>
-          <label class="wide"><span>Constraints</span><textarea id="profileConstraints" rows="3" placeholder="local-only rules, privacy, time, budget, safety..."></textarea></label>
-          <label class="wide"><span>Details</span><textarea id="profileDetails" rows="4" placeholder="stable details, preferences, context..."></textarea></label>
-          <label class="wide"><span>Facts about me</span><textarea id="profileFacts" rows="8" placeholder="one fact per line..."></textarea></label>
+          <div id="profileWizardSteps" class="profile-wizard-steps wide" hidden></div>
+          <section class="profile-step wide" data-profile-step="0" data-profile-step-title="Assistant identity" data-profile-step-description="Choose the cosmetic name and style the assistant should use in chat.">
+            <label><span>Assistant name</span><input id="profileAssistantName" placeholder="LLLMax"></label>
+            <label><span>Assistant description</span><textarea id="profileAssistantDescription" rows="3" placeholder="A concise local-first assistant that is direct, pragmatic, and privacy-preserving..."></textarea></label>
+          </section>
+          <section class="profile-step wide" data-profile-step="1" data-profile-step-title="User basics" data-profile-step-description="Add durable identity details that should be available every turn.">
+            <label><span>Username</span><input id="profileUsername" placeholder="max"></label>
+            <label><span>Email</span><input id="profileEmail" type="email" placeholder="you@example.com"></label>
+            <label class="wide"><span>Full name</span><input id="profileFullName" placeholder="Max Falk"></label>
+            <label class="wide"><span>Family & relations</span><textarea id="profileFamilyAndRelations" rows="4" placeholder="family, household, close relations, pets..."></textarea></label>
+          </section>
+          <section class="profile-step wide" data-profile-step="2" data-profile-step-title="Work and defaults" data-profile-step-description="Set context that should shape planning, tone, and assumptions.">
+            <label class="wide"><span>Work</span><textarea id="profileWork" rows="3" placeholder="job, projects, responsibilities, work preferences..."></textarea></label>
+            <label><span>Location</span><input id="profileLocation" placeholder="city, neighborhood, timezone..."></label>
+            <label><span>Communication style</span><input id="profileCommunicationStyle" placeholder="direct, concise, detailed..."></label>
+            <label class="wide"><span>Constraints</span><textarea id="profileConstraints" rows="3" placeholder="local-only rules, privacy, time, budget, safety..."></textarea></label>
+          </section>
+          <section class="profile-step wide" data-profile-step="3" data-profile-step-title="Interests and facts" data-profile-step-description="Add stable preferences and facts that should outrank learned memory.">
+            <label class="wide"><span>Interests</span><textarea id="profileInterests" rows="3" placeholder="music, games, food, sports, research areas..."></textarea></label>
+            <label class="wide"><span>Goals</span><textarea id="profileGoals" rows="3" placeholder="near-term and long-term goals..."></textarea></label>
+            <label class="wide"><span>Details</span><textarea id="profileDetails" rows="4" placeholder="stable details, preferences, context..."></textarea></label>
+            <label class="wide"><span>Facts about me</span><textarea id="profileFacts" rows="8" placeholder="one fact per line..."></textarea></label>
+          </section>
           <div class="profile-modal-actions wide">
+            <button id="profilePreviousStep" type="button" hidden>Back</button>
+            <button id="profileNextStep" type="button" hidden>Next</button>
             <button id="saveFoundationProfile" class="primary" type="submit">Save profile</button>
             <button id="cancelProfileModal" type="button">Cancel</button>
           </div>
@@ -78,8 +91,8 @@
       <div class="brand">
         <img src="/icon.svg" alt="LLLMax logo">
         <div>
-          <h1>LLLMax</h1>
-          <p>Frontier local assistant</p>
+          <h1 id="assistantBrandName">LLLMax</h1>
+          <p id="assistantBrandDescription">Frontier local assistant</p>
         </div>
       </div>
       <button id="newSession" class="primary">New session</button>
@@ -177,6 +190,7 @@
             <div id="memoryStats" class="memory-stats"></div>
             <p class="panel-help">Session sync captures user-authored durable facts every 2 turns. Canonical reflection rebuilds the profile from stored memories on a slower 8-turn cadence, or manually here.</p>
             <button id="reflectMemory" type="button">Reflect canonical profile</button>
+            <button id="resetEverything" class="danger-button" type="button">Reset from scratch</button>
             <select id="memoryCollectionSelect" hidden></select>
             <details class="memory-add">
               <summary>Remember something</summary>

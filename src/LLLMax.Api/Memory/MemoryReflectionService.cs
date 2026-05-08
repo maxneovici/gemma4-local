@@ -9,7 +9,7 @@ public sealed class MemoryReflectionService(
     ILocalChatClient chatClient,
     IRuntimeModelSettings runtimeModels) : IMemoryReflectionService
 {
-    private const string CanonicalCollection = "profile_canonical";
+    private const string CanonicalCollection = MemoryLayers.Memory;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     public async Task<MemoryReflectionResponse> ReflectAsync(MemoryReflectionRequest request, CancellationToken cancellationToken)
@@ -36,7 +36,7 @@ public sealed class MemoryReflectionService(
             var subject = string.IsNullOrWhiteSpace(fact.Subject) ? "user" : fact.Subject.Trim();
             var existing = FindMatchingFact(existingProfile.Facts, text, category, topic, subject);
             var mergeKey = MergeKey(subject, category, topic, text);
-            var metadata = new Dictionary<string, string>
+            var metadata = MemoryLayers.WithLayer(new Dictionary<string, string>
             {
                 ["kind"] = "canonical_profile_fact",
                 ["category"] = category,
@@ -46,7 +46,7 @@ public sealed class MemoryReflectionService(
                 ["observedAt"] = now,
                 ["source"] = "memory_reflection",
                 ["mergeKey"] = mergeKey
-            };
+            }, MemoryLayers.Memory);
 
             if (existing is null)
             {
@@ -75,7 +75,7 @@ public sealed class MemoryReflectionService(
                     ["kind"] = "memory_category",
                     ["topic"] = name
                 }), cancellationToken);
-            var metadata = new Dictionary<string, string>
+            var metadata = MemoryLayers.WithLayer(new Dictionary<string, string>
             {
                 ["kind"] = "memory_category",
                 ["category"] = "memory_schema",
@@ -83,7 +83,7 @@ public sealed class MemoryReflectionService(
                 ["subject"] = "memory_graph",
                 ["observedAt"] = now,
                 ["source"] = "memory_reflection"
-            };
+            }, MemoryLayers.Memory);
 
             if (categoryRecords.Records.FirstOrDefault() is { } existingRecord)
             {
@@ -139,18 +139,15 @@ public sealed class MemoryReflectionService(
     private async Task<IReadOnlyList<MemoryCollectionRecordPreview>> LoadProfileSourceAsync(int limit, CancellationToken cancellationToken)
     {
         var records = new List<MemoryCollectionRecordPreview>();
-        var coreFacts = await memoryStore.InspectCollectionAsync("core", new MemoryCollectionInspectRequest(
+        var coreFacts = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(
             Limit: limit,
             Filter: new Dictionary<string, string> { ["kind"] = "core_memory" }), cancellationToken);
         records.AddRange(coreFacts.Records.Where(record => MetadataValue(record.Metadata, "category")?.Equals("profile", StringComparison.OrdinalIgnoreCase) == true));
 
-        var core = await memoryStore.InspectCollectionAsync("core", new MemoryCollectionInspectRequest(
+        var core = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(
             Limit: limit,
             Filter: new Dictionary<string, string> { ["category"] = "profile" }), cancellationToken);
         records.AddRange(core.Records);
-
-        var profile = await memoryStore.InspectCollectionAsync("profile", new MemoryCollectionInspectRequest(Limit: Math.Max(20, limit / 2)), cancellationToken);
-        records.AddRange(profile.Records);
 
         return records
             .GroupBy(record => record.Id, StringComparer.OrdinalIgnoreCase)

@@ -11,6 +11,8 @@ public static class FoundationUserProfileFormatter
         Add(lines, "username", profile.Username);
         Add(lines, "email", profile.Email);
         Add(lines, "full name", profile.FullName);
+        Add(lines, "assistant display name", profile.AssistantName);
+        Add(lines, "assistant description", profile.AssistantDescription);
         Add(lines, "family and relations", profile.FamilyAndRelations);
         Add(lines, "work", profile.Work);
         Add(lines, "location", profile.Location);

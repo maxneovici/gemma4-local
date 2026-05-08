@@ -4,7 +4,7 @@ public sealed record DocumentUploadResponse(string Id, string FileName, long Byt
 
 public sealed record DocumentVectorizeRequest(
     string FolderPath,
-    string Collection = "documents",
+    string Collection = "knowledge",
     string SearchPattern = "*.*",
     string? Tenant = null,
     string? Category = null,

@@ -4,7 +4,7 @@ using LLLMax.Api.Memory;
 
 namespace LLLMax.Api.Tools;
 
-public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolBase<MemorySearchArguments>
+public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecallPlanner recallPlanner) : LocalToolBase<MemorySearchArguments>
 {
     public override string Name => "memory_search";
 
@@ -12,9 +12,7 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
     protected override async Task<LocalToolResult> InvokeAsync(MemorySearchArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
-        var results = string.IsNullOrWhiteSpace(arguments.Collection)
-            ? await SearchDefaultMemoryBandsAsync(arguments, invocation, cancellationToken)
-            : await memoryStore.SearchAsync(new MemorySearchRequest(arguments.Collection, arguments.Query, arguments.Limit ?? 5, arguments.Filter), cancellationToken);
+        var results = await SearchDefaultMemoryBandsAsync(arguments, invocation, cancellationToken);
 
         if (results.Count == 0)
         {
@@ -51,40 +49,41 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
     private async Task<IReadOnlyList<MemorySearchResult>> SearchDefaultMemoryBandsAsync(MemorySearchArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
-        var limit = Math.Clamp(arguments.Limit ?? 8, 6, 20);
-        var bands = new List<(MemorySearchResult Result, int Priority)>();
+        var limit = Math.Clamp(arguments.Limit ?? 12, 8, 24);
+        var bands = new List<(MemorySearchResult Result, int Priority, int QueryIndex)>();
+        var collections = GetDefaultCollections();
+        var plan = await recallPlanner.PlanAsync(arguments.Query, invocation.Messages, cancellationToken);
+        var queries = MemoryRecallPolicy.BuildQueries(arguments.Query, invocation.Messages, plan);
 
-        await AddBandAsync(bands, "profile_canonical", arguments.Query, limit, -1, MergeFilter(arguments.Filter, new Dictionary<string, string> { ["kind"] = "canonical_profile_fact" }), cancellationToken);
-        await AddBandAsync(bands, "core", arguments.Query, limit, 0, MergeFilter(arguments.Filter, new Dictionary<string, string> { ["category"] = "profile" }), cancellationToken);
-        await AddBandAsync(bands, "profile", arguments.Query, limit, 1, arguments.Filter, cancellationToken);
-        await AddBandAsync(bands, invocation.Agent.Name, arguments.Query, limit, 2, arguments.Filter, cancellationToken);
-
-        if (!invocation.Agent.Name.Equals("core", StringComparison.OrdinalIgnoreCase))
+        for (var queryIndex = 0; queryIndex < queries.Count; queryIndex++)
         {
-            await AddBandAsync(bands, "core", arguments.Query, Math.Max(1, limit / 2), 3, MergeFilter(arguments.Filter, new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken);
+            var query = queries[queryIndex];
+
+            foreach (var collection in collections)
+            {
+                await AddBandAsync(bands, collection.Name, query, limit, collection.Priority, queryIndex, MergeFilter(arguments.Filter, collection.Filter ?? new Dictionary<string, string>()), cancellationToken);
+            }
         }
 
-        await ExpandRelatedCoreProfileMemoriesAsync(bands, cancellationToken);
+        await ExpandRelatedMemoriesAsync(bands, cancellationToken);
 
-        return bands
-            .Where(item => !IsNegativeKnowledgeMemory(item.Result.Text))
-            .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderByDescending(RankDefaultMemoryResult).First())
-            .OrderByDescending(RankDefaultMemoryResult)
-            .Select(item => item.Result)
-            .Take(limit)
-            .ToList();
+        var candidates = MemoryRecallPolicy.SelectTopDiverse(bands, queries, plan, Math.Max(limit * 4, limit));
+        var ids = await recallPlanner.RerankAsync(arguments.Query, plan, candidates, limit, cancellationToken);
+        return OrderByIds(candidates, ids, limit);
     }
 
-    private static double RankDefaultMemoryResult((MemorySearchResult Result, int Priority) item) =>
-        item.Result.Score + (item.Priority < 0 ? 0.05 : 0) - (Math.Max(item.Priority, 0) * 0.05);
+    private static IReadOnlyList<MemoryCollectionBand> GetDefaultCollections() =>
+    [
+        new(MemoryLayers.Memory, 0, null)
+    ];
 
     private async Task AddBandAsync(
-        ICollection<(MemorySearchResult Result, int Priority)> bands,
+        ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands,
         string collection,
         string query,
         int limit,
         int priority,
+        int queryIndex,
         IReadOnlyDictionary<string, string>? filter,
         CancellationToken cancellationToken)
     {
@@ -92,31 +91,9 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
         foreach (var result in results)
         {
-            bands.Add((WithCollectionMetadata(result, collection), priority));
+            bands.Add((WithCollectionMetadata(result, collection), priority, queryIndex));
         }
     }
-
-    private static bool IsNegativeKnowledgeMemory(string text)
-    {
-        var lower = text.ToLowerInvariant();
-        return ContainsAny(lower,
-            "no specific information was provided",
-            "no specific information",
-            "i do not have specific information",
-            "i don't have specific information",
-            "do not have any specific information",
-            "don't have any specific information",
-            "not in my current memory",
-            "i don't have that detail",
-            "i do not have that detail",
-            "i don't know",
-            "i do not know",
-            "must have hallucinated",
-            "seems i must have hallucinated");
-    }
-
-    private static bool ContainsAny(string value, params string[] candidates) =>
-        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyDictionary<string, string>? MergeFilter(IReadOnlyDictionary<string, string>? left, IReadOnlyDictionary<string, string> right)
     {
@@ -142,12 +119,10 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
         return result with { Metadata = metadata };
     }
 
-    private async Task ExpandRelatedCoreProfileMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority)> bands, CancellationToken cancellationToken)
+    private async Task ExpandRelatedMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands, CancellationToken cancellationToken)
     {
         var seedSessions = bands
-            .Where(item => GetMetadata(item.Result, "collection")?.Equals("core", StringComparison.OrdinalIgnoreCase) == true)
-            .Where(item => GetMetadata(item.Result, "category")?.Equals("profile", StringComparison.OrdinalIgnoreCase) == true)
-            .Select(item => new { SessionId = GetMetadata(item.Result, "sessionId"), item.Result.Score, item.Priority })
+            .Select(item => new { SessionId = GetMetadata(item.Result, "sessionId"), item.Result.Score, item.Priority, item.QueryIndex })
             .Where(item => !string.IsNullOrWhiteSpace(item.SessionId))
             .GroupBy(item => item.SessionId!, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderBy(item => item.Priority).ThenByDescending(item => item.Score).First())
@@ -158,21 +133,48 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
 
         foreach (var seed in seedSessions)
         {
-            var related = await memoryStore.InspectCollectionAsync("core", new MemoryCollectionInspectRequest(
-                Limit: 12,
-                Filter: new Dictionary<string, string>
-                {
-                    ["sessionId"] = seed.SessionId!,
-                    ["category"] = "profile"
-                }), cancellationToken);
+            var related = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(
+                Limit: 16,
+                Filter: new Dictionary<string, string> { ["sessionId"] = seed.SessionId! }), cancellationToken);
 
             foreach (var record in related.Records)
             {
+                if (MemoryRecallPolicy.IsNoiseResult(new MemorySearchResult(record.Id, record.TextPreview, seed.Score, record.Metadata)))
+                {
+                    continue;
+                }
+
                 var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
-                metadata.TryAdd("collection", "core");
-                bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Max(0, seed.Score - 0.01), metadata), seed.Priority));
+                metadata.TryAdd("collection", MemoryLayers.Memory);
+                bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Score, 0.55), metadata), seed.Priority + 3, seed.QueryIndex));
             }
         }
+    }
+
+    private sealed record MemoryCollectionBand(string Name, int Priority, IReadOnlyDictionary<string, string>? Filter);
+
+    private static IReadOnlyList<MemorySearchResult> OrderByIds(IReadOnlyList<MemorySearchResult> candidates, IReadOnlyList<string> ids, int limit)
+    {
+        var selected = ids
+            .Select(id => candidates.FirstOrDefault(candidate => candidate.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
+            .Where(candidate => candidate is not null)
+            .Select(candidate => candidate!)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (selected.Count >= limit)
+            {
+                break;
+            }
+
+            if (!selected.Any(item => item.Id.Equals(candidate.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                selected.Add(candidate);
+            }
+        }
+
+        return selected.Take(limit).ToList();
     }
 
     private static string? GetMetadata(MemorySearchResult result, string key) =>

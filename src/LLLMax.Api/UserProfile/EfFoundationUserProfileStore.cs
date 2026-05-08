@@ -33,6 +33,8 @@ public sealed class EfFoundationUserProfileStore(IDbContextFactory<LocalDbContex
         entity.Username = profile.Username.Trim();
         entity.Email = profile.Email.Trim();
         entity.FullName = profile.FullName.Trim();
+        entity.AssistantName = profile.AssistantName.Trim();
+        entity.AssistantDescription = profile.AssistantDescription.Trim();
         entity.FamilyAndRelations = profile.FamilyAndRelations.Trim();
         entity.Work = profile.Work.Trim();
         entity.Location = profile.Location.Trim();
@@ -53,6 +55,8 @@ public sealed class EfFoundationUserProfileStore(IDbContextFactory<LocalDbContex
             entity.Username,
             entity.Email,
             entity.FullName,
+            entity.AssistantName,
+            entity.AssistantDescription,
             entity.FamilyAndRelations,
             entity.Work,
             entity.Location,

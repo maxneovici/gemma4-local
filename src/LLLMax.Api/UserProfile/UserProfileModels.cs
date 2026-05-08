@@ -4,6 +4,8 @@ public sealed record FoundationUserProfile(
     string Username = "",
     string Email = "",
     string FullName = "",
+    string AssistantName = "",
+    string AssistantDescription = "",
     string FamilyAndRelations = "",
     string Work = "",
     string Location = "",

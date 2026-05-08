@@ -1,4 +1,8 @@
 using LLLMax.Api.Memory;
+using LLLMax.Api.Options;
+using LLLMax.Api.Storage;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 
 namespace LLLMax.Api.Endpoints;
 
@@ -20,15 +24,19 @@ public static class MemoryEndpoints
             }
         });
 
-        group.MapPost("/search", async (MemorySearchRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        group.MapPost("/search", async (MemorySearchRequest request, ILocalMemoryStore memoryStore, IMemoryRecallPlanner recallPlanner, CancellationToken cancellationToken) =>
         {
             try
             {
-                var results = string.IsNullOrWhiteSpace(request.Collection)
-                    ? await SearchDefaultMemoryBandsAsync(request, memoryStore, cancellationToken)
-                    : await memoryStore.SearchAsync(request, cancellationToken);
+                var normalizedRequest = string.IsNullOrWhiteSpace(request.Collection)
+                    ? request with { Collection = MemoryLayers.Memory }
+                    : request;
+                var collection = normalizedRequest.Collection ?? MemoryLayers.Memory;
+                var results = collection.Equals(MemoryLayers.Memory, StringComparison.OrdinalIgnoreCase)
+                    ? await SearchDefaultMemoryBandsAsync(normalizedRequest, memoryStore, recallPlanner, cancellationToken)
+                    : await memoryStore.SearchAsync(normalizedRequest, cancellationToken);
 
-                return Results.Ok(results.Where(result => !IsNegativeKnowledgeMemory(result.Text)).ToList());
+                return Results.Ok(results.Where(result => !MemoryRecallPolicy.IsNoiseResult(result)).ToList());
             }
             catch (InvalidOperationException exception)
             {
@@ -101,6 +109,68 @@ public static class MemoryEndpoints
         group.MapDelete("/collections/{collection}", async (string collection, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
             Results.Ok(await memoryStore.DeleteCollectionAsync(collection, cancellationToken)));
 
+        group.MapPost("/reset-all", async (MemoryResetAllRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            if (!request.Confirm.Equals("RESET ALL VECTOR MEMORY", StringComparison.Ordinal))
+            {
+                return Results.BadRequest(new { Error = "Confirmation must be exactly 'RESET ALL VECTOR MEMORY'." });
+            }
+
+            var collections = await memoryStore.ListCollectionsAsync(cancellationToken);
+            var deleted = new List<string>();
+
+            foreach (var collection in collections)
+            {
+                var result = await memoryStore.DeleteCollectionAsync(collection.Name, cancellationToken);
+
+                if (result.Deleted)
+                {
+                    deleted.Add(collection.Name);
+                }
+            }
+
+            return Results.Ok(new MemoryResetAllResponse(deleted.Count, deleted));
+        });
+
+        group.MapPost("/reset-everything", async (MemoryResetEverythingRequest request, ILocalMemoryStore memoryStore, IDbContextFactory<LocalDbContext> dbFactory, CancellationToken cancellationToken) =>
+        {
+            if (!request.Confirm.Equals("RESET EVERYTHING", StringComparison.Ordinal))
+            {
+                return Results.BadRequest(new { Error = "Confirmation must be exactly 'RESET EVERYTHING'." });
+            }
+
+            var collections = await memoryStore.ListCollectionsAsync(cancellationToken);
+            var deletedCollections = new List<string>();
+
+            foreach (var collection in collections)
+            {
+                var result = await memoryStore.DeleteCollectionAsync(collection.Name, cancellationToken);
+
+                if (result.Deleted)
+                {
+                    deletedCollections.Add(collection.Name);
+                }
+            }
+
+            await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
+            var deletedRows = 0;
+            deletedRows += await db.McpTools.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.McpServers.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.ApiIntegrations.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.MemoryConsolidationJobs.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.TaskGraphs.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.Approvals.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.Documents.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.BackgroundJobArtifacts.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.BackgroundJobs.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.UserProfiles.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.SessionMessages.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.Sessions.ExecuteDeleteAsync(cancellationToken);
+            deletedRows += await db.AppMetadata.ExecuteDeleteAsync(cancellationToken);
+
+            return Results.Ok(new MemoryResetEverythingResponse(deletedCollections.Count, deletedCollections, deletedRows));
+        });
+
         group.MapGet("/consolidation/jobs", async (IMemoryConsolidationService consolidation, CancellationToken cancellationToken) =>
             Results.Ok(await consolidation.ListJobsAsync(cancellationToken)));
 
@@ -119,7 +189,7 @@ public static class MemoryEndpoints
         return app;
     }
 
-    private static async Task<IReadOnlyList<MemorySearchResult>> SearchDefaultMemoryBandsAsync(MemorySearchRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken)
+    private static async Task<IReadOnlyList<MemorySearchResult>> SearchDefaultMemoryBandsAsync(MemorySearchRequest request, ILocalMemoryStore memoryStore, IMemoryRecallPlanner recallPlanner, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(request.Query))
         {
@@ -127,35 +197,41 @@ public static class MemoryEndpoints
         }
 
         var limit = Math.Clamp(request.Limit, 6, 20);
-        var bands = new List<(MemorySearchResult Result, int Priority)>();
+        var bands = new List<(MemorySearchResult Result, int Priority, int QueryIndex)>();
+        var collections = GetDefaultCollections();
+        var plan = await recallPlanner.PlanAsync(request.Query, null, cancellationToken);
+        var queries = MemoryRecallPolicy.BuildQueries(request.Query, null, plan);
 
-        await AddBandAsync(bands, memoryStore, "profile_canonical", request.Query, limit, -1, MergeFilter(request.Filter, new Dictionary<string, string> { ["kind"] = "canonical_profile_fact" }), cancellationToken);
-        await AddBandAsync(bands, memoryStore, "core", request.Query, limit, 0, MergeFilter(request.Filter, new Dictionary<string, string> { ["category"] = "profile" }), cancellationToken);
-        await AddBandAsync(bands, memoryStore, "profile", request.Query, limit, 1, request.Filter, cancellationToken);
-        await AddBandAsync(bands, memoryStore, "coordinator", request.Query, limit, 2, request.Filter, cancellationToken);
-        await AddBandAsync(bands, memoryStore, "core", request.Query, Math.Max(1, limit / 2), 3, MergeFilter(request.Filter, new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken);
-        await ExpandRelatedCoreProfileMemoriesAsync(bands, memoryStore, cancellationToken);
+        for (var queryIndex = 0; queryIndex < queries.Count; queryIndex++)
+        {
+            var query = queries[queryIndex];
 
-        return bands
-            .Where(item => !IsNegativeKnowledgeMemory(item.Result.Text))
-            .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderByDescending(RankDefaultMemoryResult).First())
-            .OrderByDescending(RankDefaultMemoryResult)
-            .Select(item => item.Result)
-            .Take(limit)
-            .ToList();
+            foreach (var collection in collections)
+            {
+                await AddBandAsync(bands, memoryStore, collection.Name, query, limit, collection.Priority, queryIndex, MergeFilter(request.Filter, collection.Filter ?? new Dictionary<string, string>()), cancellationToken);
+            }
+        }
+
+        await ExpandRelatedMemoriesAsync(bands, memoryStore, cancellationToken);
+
+        var candidates = MemoryRecallPolicy.SelectTopDiverse(bands, queries, plan, Math.Max(limit * 4, limit));
+        var ids = await recallPlanner.RerankAsync(request.Query, plan, candidates, limit, cancellationToken);
+        return OrderByIds(candidates, ids, limit);
     }
 
-    private static double RankDefaultMemoryResult((MemorySearchResult Result, int Priority) item) =>
-        item.Result.Score + (item.Priority < 0 ? 0.05 : 0) - (Math.Max(item.Priority, 0) * 0.05);
+    private static IReadOnlyList<MemoryCollectionBand> GetDefaultCollections() =>
+    [
+        new(MemoryLayers.Memory, 0, null)
+    ];
 
     private static async Task AddBandAsync(
-        ICollection<(MemorySearchResult Result, int Priority)> bands,
+        ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands,
         ILocalMemoryStore memoryStore,
         string collection,
         string query,
         int limit,
         int priority,
+        int queryIndex,
         IReadOnlyDictionary<string, string>? filter,
         CancellationToken cancellationToken)
     {
@@ -163,7 +239,7 @@ public static class MemoryEndpoints
 
         foreach (var result in results)
         {
-            bands.Add((WithCollectionMetadata(result, collection), priority));
+            bands.Add((WithCollectionMetadata(result, collection), priority, queryIndex));
         }
     }
 
@@ -191,12 +267,10 @@ public static class MemoryEndpoints
         return result with { Metadata = metadata };
     }
 
-    private static async Task ExpandRelatedCoreProfileMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority)> bands, ILocalMemoryStore memoryStore, CancellationToken cancellationToken)
+    private static async Task ExpandRelatedMemoriesAsync(ICollection<(MemorySearchResult Result, int Priority, int QueryIndex)> bands, ILocalMemoryStore memoryStore, CancellationToken cancellationToken)
     {
         var seedSessions = bands
-            .Where(item => GetMetadata(item.Result.Metadata, "collection")?.Equals("core", StringComparison.OrdinalIgnoreCase) == true)
-            .Where(item => GetMetadata(item.Result.Metadata, "category")?.Equals("profile", StringComparison.OrdinalIgnoreCase) == true)
-            .Select(item => new { SessionId = GetMetadata(item.Result.Metadata, "sessionId"), item.Result.Score, item.Priority })
+            .Select(item => new { SessionId = GetMetadata(item.Result.Metadata, "sessionId"), item.Result.Score, item.Priority, item.QueryIndex })
             .Where(item => !string.IsNullOrWhiteSpace(item.SessionId))
             .GroupBy(item => item.SessionId!, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderBy(item => item.Priority).ThenByDescending(item => item.Score).First())
@@ -207,50 +281,58 @@ public static class MemoryEndpoints
 
         foreach (var seed in seedSessions)
         {
-            var related = await memoryStore.InspectCollectionAsync("core", new MemoryCollectionInspectRequest(
-                Limit: 12,
-                Filter: new Dictionary<string, string>
-                {
-                    ["sessionId"] = seed.SessionId!,
-                    ["category"] = "profile"
-                }), cancellationToken);
+            var related = await memoryStore.InspectCollectionAsync(MemoryLayers.Memory, new MemoryCollectionInspectRequest(
+                Limit: 16,
+                Filter: new Dictionary<string, string> { ["sessionId"] = seed.SessionId! }), cancellationToken);
 
             foreach (var record in related.Records)
             {
-                if (IsNegativeKnowledgeMemory(record.TextPreview))
+                if (MemoryRecallPolicy.IsNegativeKnowledgeMemory(record.TextPreview))
                 {
                     continue;
                 }
 
                 var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
-                metadata.TryAdd("collection", "core");
-                bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Max(0, seed.Score - 0.01), metadata), seed.Priority));
+                metadata.TryAdd("collection", MemoryLayers.Memory);
+                bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Score, 0.55), metadata), seed.Priority + 3, seed.QueryIndex));
             }
         }
     }
 
-    private static bool IsNegativeKnowledgeMemory(string text)
-    {
-        var lower = text.ToLowerInvariant();
-        return ContainsAny(lower,
-            "no specific information was provided",
-            "no specific information",
-            "i do not have specific information",
-            "i don't have specific information",
-            "do not have any specific information",
-            "don't have any specific information",
-            "not in my current memory",
-            "i don't have that detail",
-            "i do not have that detail",
-            "i don't know",
-            "i do not know",
-            "must have hallucinated",
-            "seems i must have hallucinated");
-    }
-
-    private static bool ContainsAny(string value, params string[] candidates) =>
-        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
-
     private static string? GetMetadata(IReadOnlyDictionary<string, string> metadata, string key) =>
         metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+    private sealed record MemoryCollectionBand(string Name, int Priority, IReadOnlyDictionary<string, string>? Filter);
+
+    private sealed record MemoryResetAllRequest(string Confirm);
+
+    private sealed record MemoryResetAllResponse(int DeletedCollectionCount, IReadOnlyList<string> DeletedCollections);
+
+    private sealed record MemoryResetEverythingRequest(string Confirm);
+
+    private sealed record MemoryResetEverythingResponse(int DeletedCollectionCount, IReadOnlyList<string> DeletedCollections, int DeletedSqliteRows);
+
+    private static IReadOnlyList<MemorySearchResult> OrderByIds(IReadOnlyList<MemorySearchResult> candidates, IReadOnlyList<string> ids, int limit)
+    {
+        var selected = ids
+            .Select(id => candidates.FirstOrDefault(candidate => candidate.Id.Equals(id, StringComparison.OrdinalIgnoreCase)))
+            .Where(candidate => candidate is not null)
+            .Select(candidate => candidate!)
+            .ToList();
+
+        foreach (var candidate in candidates)
+        {
+            if (selected.Count >= limit)
+            {
+                break;
+            }
+
+            if (!selected.Any(item => item.Id.Equals(candidate.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                selected.Add(candidate);
+            }
+        }
+
+        return selected.Take(limit).ToList();
+    }
 }
