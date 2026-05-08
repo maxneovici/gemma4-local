@@ -11,6 +11,8 @@ public static class BackgroundJobKinds
     public const string WebResearch = "web_research";
 
     public const string MemoryConsolidation = "memory_consolidation";
+
+    public const string MemoryReflection = "memory_reflection";
 }
 
 public static class BackgroundJobStatuses

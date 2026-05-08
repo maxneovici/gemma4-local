@@ -14,7 +14,7 @@ public sealed record MemoryUpsertItem(
     IReadOnlyDictionary<string, string>? Metadata = null);
 
 public sealed record MemorySearchRequest(
-    string Collection,
+    string? Collection,
     string Query,
     int Limit = 5,
     IReadOnlyDictionary<string, string>? Filter = null);

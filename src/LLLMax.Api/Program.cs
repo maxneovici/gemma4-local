@@ -151,10 +151,12 @@ builder.Services.AddSingleton<IBackgroundJobHandler, DocumentVectorizationJobHan
 builder.Services.AddSingleton<IBackgroundJobHandler, MemoryReportJobHandler>();
 builder.Services.AddSingleton<IBackgroundJobHandler, WebResearchJobHandler>();
 builder.Services.AddSingleton<IBackgroundJobHandler, MemoryConsolidationJobHandler>();
+builder.Services.AddSingleton<IBackgroundJobHandler, MemoryReflectionJobHandler>();
 builder.Services.AddSingleton<ITaskGraphStore, EfTaskGraphStore>();
 builder.Services.AddSingleton<ITaskGraphService, TaskGraphService>();
 builder.Services.AddSingleton<IMemoryConsolidationJobStore, EfMemoryConsolidationJobStore>();
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
+builder.Services.AddSingleton<IMemoryReflectionService, MemoryReflectionService>();
 builder.Services.AddSingleton<ISkillRegistry, FileSkillRegistry>();
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();

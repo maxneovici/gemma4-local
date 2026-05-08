@@ -49,7 +49,8 @@ public sealed class MemoryConsolidationService(
                         ["kind"] = "consolidated_session",
                         ["category"] = "session_summary",
                         ["sessionId"] = session.Id,
-                        ["taskGraphId"] = graph?.Id ?? string.Empty
+                        ["taskGraphId"] = graph?.Id ?? string.Empty,
+                        ["observedAt"] = now.ToString("O")
                     })
             };
 
@@ -62,7 +63,9 @@ public sealed class MemoryConsolidationService(
                     {
                         ["kind"] = "core_memory",
                         ["category"] = "profile",
-                        ["sessionId"] = session.Id
+                        ["sessionId"] = session.Id,
+                        ["subject"] = "user",
+                        ["observedAt"] = now.ToString("O")
                     })));
 
             writes.AddRange((payload.Interests ?? [])
@@ -74,7 +77,9 @@ public sealed class MemoryConsolidationService(
                     {
                         ["kind"] = "interest",
                         ["category"] = "profile",
-                        ["sessionId"] = session.Id
+                        ["sessionId"] = session.Id,
+                        ["subject"] = "user",
+                        ["observedAt"] = now.ToString("O")
                     })));
 
             writes.AddRange((payload.OpenLoops ?? [])
@@ -86,7 +91,8 @@ public sealed class MemoryConsolidationService(
                     {
                         ["kind"] = "open_loop",
                         ["category"] = "follow_up",
-                        ["sessionId"] = session.Id
+                        ["sessionId"] = session.Id,
+                        ["observedAt"] = now.ToString("O")
                     })));
 
             if (graph is not null)
@@ -99,7 +105,8 @@ public sealed class MemoryConsolidationService(
                         ["kind"] = "task_graph",
                         ["sessionId"] = session.Id,
                         ["taskGraphId"] = graph.Id,
-                        ["status"] = graph.Status
+                        ["status"] = graph.Status,
+                        ["observedAt"] = now.ToString("O")
                     }));
             }
 

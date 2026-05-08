@@ -293,7 +293,8 @@ public sealed class DocumentService(
             ["contentHash"] = contentHash,
             ["chunkIndex"] = chunkIndex.ToString(System.Globalization.CultureInfo.InvariantCulture),
             ["chunkCount"] = chunkCount.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            ["kind"] = "document_chunk"
+            ["kind"] = "document_chunk",
+            ["observedAt"] = DateTimeOffset.UtcNow.ToString("O")
         };
 
         if (!string.IsNullOrWhiteSpace(request.Tenant))

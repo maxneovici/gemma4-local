@@ -509,6 +509,7 @@ Personal context and freshness rules:
 - For category news summaries, keep at most 3 category bullets under each source, use one distinct headline/story per bullet, and never repeat the same headline/story under the same source. If there are fewer reliable items, provide fewer bullets.
 - For Reddit requests, infer the appropriate subreddit URL from the user's wording and use web_browse. If Reddit returns a verification, login, or app wall, follow the web_browse tool guidance and try an appropriate public listing URL such as /r/<subreddit>/top/?t=day or old.reddit.com before reporting that browsing is blocked.
 - Build a durable local profile of the user over time. When the user shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project.
+- The memory graph is self-evolving: when storing memory, choose useful metadata keys yourself (for example category, topic, subject, project, tenant, preference, source, confidence, or relation) so future retrieval can join related memories without code changes. Related memories can coexist; do not assume one fact replaces another unless the user says it changed.
 - Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
 - Use remembered profile information to personalize tone and defaults, but never let personality override tool-use safety, routing, citations, or local-only constraints.
 - Do not identify yourself as the underlying model. You are LLLMax.
@@ -896,7 +897,7 @@ Browsed source bundle:
                 continue;
             }
 
-            builder.AppendLine($"- [{memory.Score:0.000}] ({kind}) {text}");
+            builder.AppendLine($"- [{memory.Score:0.000}] ({kind}{FormatMemoryMetadata(memory.Metadata)}) {text}");
         }
 
         if (builder.Length == 0)
@@ -905,9 +906,29 @@ Browsed source bundle:
         }
 
         return freshBrowsingRequest
-            ? $"Fresh/current request: memory below may only identify sources, interests, or browse targets. Do not use memory text as current facts, headlines, dates, or summaries.{Environment.NewLine}{builder}"
-            : builder.ToString();
+            ? $"Fresh/current request: memory below may only identify sources, interests, or browse targets. Do not use memory text as current facts, headlines, dates, or summaries. Personal memories are always included when relevant; related facts can coexist unless metadata says one supersedes another.{Environment.NewLine}{builder}"
+            : $"Relevant local memory. Personal profile memories are intentionally included on every turn when retrieval finds them; treat related memories as a graph of complementary facts, not a single exclusive slot unless metadata says superseded or invalid.{Environment.NewLine}{builder}";
     }
+
+    private static string FormatMemoryMetadata(IReadOnlyDictionary<string, string> metadata)
+    {
+        var parts = new[]
+        {
+            MetadataValue(metadata, "collection") is { } collection ? $"collection={collection}" : null,
+            MetadataValue(metadata, "category") is { } category ? $"category={category}" : null,
+            MetadataValue(metadata, "topic") is { } topic ? $"topic={topic}" : null,
+            MetadataValue(metadata, "subject") is { } subject ? $"subject={subject}" : null,
+            MetadataValue(metadata, "observedAt") is { } observedAt ? $"observedAt={observedAt}" : null,
+            MetadataValue(metadata, "sourceFile") is { } sourceFile ? $"sourceFile={sourceFile}" : null,
+            MetadataValue(metadata, "chunkIndex") is { } chunkIndex ? $"chunk={chunkIndex}" : null
+        }.Where(part => part is not null);
+
+        var value = string.Join(", ", parts);
+        return string.IsNullOrWhiteSpace(value) ? string.Empty : $"; {value}";
+    }
+
+    private static string? MetadataValue(IReadOnlyDictionary<string, string> metadata, string key) =>
+        metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
 
     private static string FormatFreshMemoryContextText(string text)
     {
@@ -932,33 +953,57 @@ Browsed source bundle:
 
     private async Task<IReadOnlyList<MemorySearchResult>> SearchMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
     {
-        var results = new List<MemorySearchResult>();
-        results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
-            Collection: agent.Name,
-            Query: message,
-            Limit: _options.Memory.MaxContextItems), cancellationToken));
+        var bands = new List<(MemorySearchResult Result, int Priority)>();
+        var limit = Math.Max(1, _options.Memory.MaxContextItems);
+
+        await AddMemoryBandAsync(bands, "profile_canonical", message, limit, -1, new Dictionary<string, string> { ["kind"] = "canonical_profile_fact" }, cancellationToken);
+        await AddMemoryBandAsync(bands, "core", message, limit, 0, new Dictionary<string, string> { ["category"] = "profile" }, cancellationToken);
+        await AddMemoryBandAsync(bands, "profile", message, limit, 1, null, cancellationToken);
+        await AddMemoryBandAsync(bands, agent.Name, message, limit, 2, null, cancellationToken);
 
         if (!agent.Name.Equals("core", StringComparison.OrdinalIgnoreCase))
         {
-            results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
-                Collection: "core",
-                Query: message,
-                Limit: _options.Memory.MaxContextItems,
-                Filter: new Dictionary<string, string> { ["category"] = "profile" }), cancellationToken));
-
-            results.AddRange(await memoryStore.SearchAsync(new MemorySearchRequest(
+            var summaries = await memoryStore.SearchAsync(new MemorySearchRequest(
                 Collection: "core",
                 Query: message,
                 Limit: Math.Max(1, _options.Memory.MaxContextItems / 2),
-                Filter: new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken));
+                Filter: new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken);
+
+            bands.AddRange(summaries.Select(result => (WithCollectionMetadata(result, "core"), 3)));
         }
 
-        return results
-            .GroupBy(result => result.Id, StringComparer.OrdinalIgnoreCase)
-            .Select(group => group.OrderByDescending(result => result.Score).First())
-            .OrderByDescending(result => result.Score)
-            .Take(Math.Max(1, _options.Memory.MaxContextItems * 2))
+        return bands
+            .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderBy(item => item.Priority).ThenByDescending(item => item.Result.Score).First())
+            .OrderBy(item => item.Priority)
+            .ThenByDescending(item => item.Result.Score)
+            .Select(item => item.Result)
+            .Take(Math.Max(1, _options.Memory.MaxContextItems * 3))
             .ToList();
+    }
+
+    private async Task AddMemoryBandAsync(
+        ICollection<(MemorySearchResult Result, int Priority)> bands,
+        string collection,
+        string query,
+        int limit,
+        int priority,
+        IReadOnlyDictionary<string, string>? filter,
+        CancellationToken cancellationToken)
+    {
+        var results = await memoryStore.SearchAsync(new MemorySearchRequest(collection, query, limit, filter), cancellationToken);
+
+        foreach (var result in results)
+        {
+            bands.Add((WithCollectionMetadata(result, collection), priority));
+        }
+    }
+
+    private static MemorySearchResult WithCollectionMetadata(MemorySearchResult result, string collection)
+    {
+        var metadata = result.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+        metadata.TryAdd("collection", collection);
+        return result with { Metadata = metadata };
     }
 
     private string BuildToolContext(AgentDefinition agent, bool allowTools)

@@ -52,6 +52,11 @@ public sealed class InMemoryVectorStore(IEmbeddingGenerator embeddingGenerator) 
 
     public async Task<IReadOnlyList<MemorySearchResult>> SearchAsync(MemorySearchRequest request, CancellationToken cancellationToken)
     {
+        if (string.IsNullOrWhiteSpace(request.Collection) || string.IsNullOrWhiteSpace(request.Query))
+        {
+            return [];
+        }
+
         if (!_collections.TryGetValue(request.Collection, out var collection))
         {
             return [];

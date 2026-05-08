@@ -194,6 +194,29 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .panel-help { margin: 0.55rem 0 0; color: var(--muted); font-size: 0.72rem; line-height: 1.35; }
 .memory-search { display: grid; grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr); gap: 0.5rem; margin-top: 0.65rem; }
 .memory-search button { grid-column: 1 / -1; }
+#reflectMemory, #reflectProfile { width: 100%; margin-top: 0.55rem; }
+.my-profile { display: grid; gap: 0.55rem; }
+.profile-summary { display: grid; gap: 0.16rem; border: 1px solid rgba(56, 189, 248, 0.13); border-radius: 13px; padding: 0.65rem; background: rgba(8, 8, 9, 0.38); }
+.profile-summary strong { color: var(--accent); font-size: 0.78rem; line-height: 1.35; }
+.profile-summary span { color: var(--muted); font-size: 0.64rem; }
+.profile-facts { display: grid; gap: 0.42rem; }
+.profile-facts article { border: 1px solid var(--line); border-radius: 11px; padding: 0.5rem 0.6rem; background: rgba(8, 8, 9, 0.34); }
+.profile-facts strong { color: var(--accent-2); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.profile-facts p { margin: 0.2rem 0 0; color: #d8d8d8; font-size: 0.7rem; line-height: 1.38; }
+.memory-quality { display: grid; gap: 0.45rem; margin-top: 0.55rem; border: 1px solid rgba(56, 189, 248, 0.12); border-radius: 13px; padding: 0.65rem; background: rgba(8, 8, 9, 0.36); }
+.quality-head { display: flex; justify-content: space-between; gap: 0.5rem; }
+.quality-head span { display: grid; gap: 0.1rem; }
+.quality-head strong { color: var(--accent); font-size: 0.76rem; }
+.quality-head small { color: var(--muted); font-size: 0.64rem; line-height: 1.35; }
+.quality-categories { display: flex; gap: 0.28rem; flex-wrap: wrap; }
+.quality-categories span, .profile-category { padding: 0.14rem 0.38rem; border: 1px solid rgba(56, 189, 248, 0.16); border-radius: 999px; color: var(--accent-2); background: rgba(20, 184, 166, 0.05); font-size: 0.62rem; }
+.profile-category { cursor: pointer; }
+.profile-category.active { color: var(--text); border-color: rgba(56, 189, 248, 0.42); background: rgba(56, 189, 248, 0.12); }
+.quality-categories b { margin-left: 0.18rem; color: var(--muted); font-weight: 600; }
+.profile-category-title { display: flex; align-items: center; justify-content: space-between; gap: 0.45rem; color: var(--muted); font-size: 0.66rem; }
+.profile-category-title strong { color: var(--accent); text-transform: uppercase; letter-spacing: 0.08em; }
+.quality-facts { display: grid; gap: 0.3rem; }
+.quality-facts p { margin: 0; color: #d8d8d8; font-size: 0.68rem; line-height: 1.38; }
 .memory-add { margin-top: 0.55rem; border: 1px solid var(--line); border-radius: 11px; padding: 0.5rem 0.6rem; background: rgba(8, 8, 9, 0.35); }
 .memory-add summary { cursor: pointer; color: var(--accent); font-size: 0.76rem; }
 .memory-add textarea, .memory-add input, .memory-add button { width: 100%; margin-top: 0.5rem; }

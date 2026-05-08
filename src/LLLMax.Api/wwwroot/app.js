@@ -12,6 +12,8 @@ const state = {
   selectedCollection: null,
   collectionInspectCursor: null,
   collectionInspectFilter: {},
+  memoryProfile: null,
+  selectedProfileCategory: null,
   selectedTenant: null,
   selectedCategory: null,
   draftSession: null,
@@ -708,13 +710,67 @@ function formatSessionDate(value) {
 
 async function loadMemoryStats() {
   const stats = await api('/memory/stats');
+  const profile = await api('/memory/profile');
+  state.memoryProfile = profile;
   $('memoryStats').innerHTML = `
     <button id="openQdrantBrowser" class="runtime-pill qdrant-button" type="button"><span>browse vector memory</span><strong>${escapeHtml(stats.provider)}</strong></button>
     <div class="runtime-pill"><span>collections</span><strong>${stats.collectionCount}</strong></div>
     <div class="runtime-pill"><span>records</span><strong>${stats.recordCount}</strong></div>
   `;
+  renderMemoryQuality(profile);
+  renderMyProfile(profile);
   $('openQdrantBrowser').addEventListener('click', openQdrantBrowser);
   await loadMemoryCollections();
+}
+
+function renderMyProfile(profile) {
+  if (!$('myProfile')) return;
+
+  const facts = profile?.facts ?? [];
+  const categories = profile?.categories ?? [];
+  const selectedCategoryExists = categories.some(category => category.name === state.selectedProfileCategory);
+  const selectedCategory = selectedCategoryExists ? state.selectedProfileCategory : categories[0]?.name ?? null;
+  state.selectedProfileCategory = selectedCategory;
+  const visibleFacts = selectedCategory
+    ? facts.filter(fact => fact.category === selectedCategory)
+    : facts;
+  const reflected = profile?.reflectedAt ? new Date(profile.reflectedAt).toLocaleString() : 'not reflected yet';
+  $('myProfile').innerHTML = `
+    <div class="profile-summary"><strong>${escapeHtml(profile?.summary ?? 'No canonical profile yet.')}</strong><span>${escapeHtml(reflected)}</span></div>
+    <div class="quality-categories">
+      ${categories.slice(0, 12).map(category => `<button class="profile-category ${category.name === selectedCategory ? 'active' : ''}" data-profile-category="${escapeHtml(category.name)}" type="button">${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</button>`).join('') || '<span>no categories yet</span>'}
+    </div>
+    ${selectedCategory ? `<div class="profile-category-title"><strong>${escapeHtml(selectedCategory)}</strong><span>${escapeHtml(visibleFacts.length)} fact${visibleFacts.length === 1 ? '' : 's'}</span></div>` : ''}
+    <div class="profile-facts">
+      ${visibleFacts.slice(0, 12).map(fact => `<article><strong>${escapeHtml(fact.topic || fact.category)}</strong><p>${escapeHtml(fact.text)}</p></article>`).join('') || '<p class="muted">No facts in this category yet.</p>'}
+    </div>
+  `;
+
+  document.querySelectorAll('[data-profile-category]').forEach(button => {
+    button.addEventListener('click', () => {
+      state.selectedProfileCategory = button.dataset.profileCategory;
+      renderMyProfile(state.memoryProfile);
+    });
+  });
+}
+
+function renderMemoryQuality(profile) {
+  if (!$('memoryQuality')) return;
+
+  const reflected = profile?.reflectedAt ? new Date(profile.reflectedAt).toLocaleString() : 'not reflected yet';
+  const topFacts = (profile?.facts ?? []).slice(0, 4);
+  const categories = (profile?.categories ?? []).slice(0, 6);
+  $('memoryQuality').innerHTML = `
+    <div class="quality-head">
+      <span><strong>Canonical profile</strong><small>${escapeHtml(profile?.factCount ?? 0)} facts · ${escapeHtml(profile?.categoryCount ?? 0)} schema categories · ${escapeHtml(reflected)}</small></span>
+    </div>
+    <div class="quality-categories">
+      ${categories.map(category => `<span>${escapeHtml(category.name)} ${category.count ? `<b>${escapeHtml(category.count)}</b>` : ''}</span>`).join('') || '<span>no categories yet</span>'}
+    </div>
+    <div class="quality-facts">
+      ${topFacts.map(fact => `<p>${escapeHtml(fact.text)}</p>`).join('') || '<p class="muted">Run memory reflection to build a compact canonical profile.</p>'}
+    </div>
+  `;
 }
 
 async function loadMemoryCollections() {
@@ -1746,6 +1802,22 @@ async function consolidateSession() {
   }, 'Consolidating memory...');
 }
 
+async function reflectMemory() {
+  await guarded(async () => {
+    await api('/background-jobs/', {
+      method: 'POST',
+      body: JSON.stringify({
+        kind: 'memory_reflection',
+        title: 'Reflect canonical profile memory',
+        payload: { limit: 100 },
+        notifySession: false
+      })
+    });
+    await loadBackgroundJobs();
+    await loadMemoryStats();
+  }, 'Scheduling memory reflection...');
+}
+
 async function cancelBackgroundJob(id) {
   await guarded(async () => {
     await api(`/background-jobs/${id}/cancel`, { method: 'POST' });
@@ -1817,6 +1889,8 @@ $('discoverApi').addEventListener('click', discoverApi);
 $('searchMemory').addEventListener('click', searchMemory);
 $('addMemory').addEventListener('click', addMemory);
 $('consolidateSession').addEventListener('click', consolidateSession);
+$('reflectMemory').addEventListener('click', reflectMemory);
+$('reflectProfile').addEventListener('click', reflectMemory);
 $('closeQdrantBrowser').addEventListener('click', closeQdrantBrowser);
 $('qdrantModal').addEventListener('click', event => {
   if (event.target.id === 'qdrantModal') closeQdrantBrowser();
