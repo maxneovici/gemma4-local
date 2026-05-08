@@ -19,6 +19,10 @@ public sealed record CanonicalProfileFact(
     string Category = "profile",
     string? Topic = null,
     string Subject = "user",
+    string? MemoryType = null,
+    string? Subcategory = null,
+    string? Relation = null,
+    string? RelatedTo = null,
     double? Confidence = null);
 
 public sealed record MemoryCategorySuggestion(

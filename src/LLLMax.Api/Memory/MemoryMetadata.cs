@@ -86,7 +86,7 @@ public static class MemoryMetadata
         return normalized switch
         {
             "identity" or "personal_identity" or "profile_identity" => "identity",
-            "relationship" or "relations" or "family" or "personal_details" => "relationship",
+            "relationship" or "relationships" or "relations" or "family" or "personal_details" => "relationship",
             "preference" or "preferences" or "ranking_criteria" or "communication_style" => "preference",
             "opinion" or "opinions" => "opinion",
             "interest" or "interests" or "hobby" or "hobbies" => "interest",
@@ -95,7 +95,7 @@ public static class MemoryMetadata
             "constraint" or "constraints" => "constraint",
             "document_chunk" or "knowledge" or "reference" => "knowledge",
             "session_summary" or "consolidated_session" => "summary",
-            "memory_category" or "memory_schema" => "schema",
+            "memory_category" or "memory_schema" or "schema" => "schema",
             _ => "fact"
         };
     }

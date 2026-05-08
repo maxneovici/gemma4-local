@@ -19,6 +19,24 @@ public sealed record MemoryConsolidationResponse(MemoryConsolidationJob Job, Tas
 
 public sealed record MemoryConsolidationPayload(
     string Summary,
-    IReadOnlyList<string>? CoreMemories = null,
-    IReadOnlyList<string>? Interests = null,
+    IReadOnlyList<MemoryConsolidationItem>? CoreMemories = null,
+    IReadOnlyList<MemoryConsolidationItem>? Interests = null,
+    IReadOnlyList<MemoryRelationshipItem>? Relationships = null,
     IReadOnlyList<string>? OpenLoops = null);
+
+public sealed record MemoryConsolidationItem(
+    string Text,
+    string? MemoryType = null,
+    string? Subcategory = null,
+    string? Topic = null,
+    string? Subject = null,
+    double? Confidence = null);
+
+public sealed record MemoryRelationshipItem(
+    string Text,
+    string? Relation = null,
+    string? RelatedTo = null,
+    string? Topic = null,
+    string? Subject = null,
+    string? Subcategory = null,
+    double? Confidence = null);

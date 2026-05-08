@@ -20,6 +20,7 @@ public static class BackgroundJobEndpoints
                 job.ProgressCurrent,
                 job.ProgressTotal,
                 job.StatusMessage,
+                job.Result,
                 job.Error,
                 job.UpdatedAt)));
         });

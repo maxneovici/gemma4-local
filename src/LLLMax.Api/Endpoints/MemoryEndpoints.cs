@@ -1,5 +1,7 @@
 using LLLMax.Api.Memory;
 using LLLMax.Api.Options;
+using LLLMax.Api.Services;
+using LLLMax.Api.Sessions;
 using LLLMax.Api.Storage;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -209,7 +211,7 @@ public static class MemoryEndpoints
             return Results.Ok(new MemoryResetAllResponse(deleted.Count, deleted));
         });
 
-        group.MapPost("/reset-everything", async (MemoryResetEverythingRequest request, ILocalMemoryStore memoryStore, IDbContextFactory<LocalDbContext> dbFactory, CancellationToken cancellationToken) =>
+        group.MapPost("/reset-everything", async (MemoryResetEverythingRequest request, ILocalMemoryStore memoryStore, IAssistantSessionStore sessions, LocalDataPaths dataPaths, IDbContextFactory<LocalDbContext> dbFactory, CancellationToken cancellationToken) =>
         {
             if (!request.Confirm.Equals("RESET EVERYTHING", StringComparison.Ordinal))
             {
@@ -229,6 +231,9 @@ public static class MemoryEndpoints
                 }
             }
 
+            await sessions.DeleteAllAsync(cancellationToken);
+            var deletedSessionFiles = DeleteLegacySessionFiles(dataPaths.SessionsDirectory);
+
             await using var db = await dbFactory.CreateDbContextAsync(cancellationToken);
             var deletedRows = 0;
             deletedRows += await db.McpTools.ExecuteDeleteAsync(cancellationToken);
@@ -245,7 +250,7 @@ public static class MemoryEndpoints
             deletedRows += await db.Sessions.ExecuteDeleteAsync(cancellationToken);
             deletedRows += await db.AppMetadata.ExecuteDeleteAsync(cancellationToken);
 
-            return Results.Ok(new MemoryResetEverythingResponse(deletedCollections.Count, deletedCollections, deletedRows));
+            return Results.Ok(new MemoryResetEverythingResponse(deletedCollections.Count, deletedCollections, deletedRows, deletedSessionFiles));
         });
 
         group.MapGet("/consolidation/jobs", async (IMemoryConsolidationService consolidation, CancellationToken cancellationToken) =>
@@ -264,6 +269,33 @@ public static class MemoryEndpoints
         });
 
         return app;
+    }
+
+    private static int DeleteLegacySessionFiles(string sessionsDirectory)
+    {
+        if (!Directory.Exists(sessionsDirectory))
+        {
+            return 0;
+        }
+
+        var deleted = 0;
+
+        foreach (var file in Directory.EnumerateFiles(sessionsDirectory, "*.json"))
+        {
+            try
+            {
+                File.Delete(file);
+                deleted++;
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+
+        return deleted;
     }
 
     private static async Task<IReadOnlyList<MemorySearchResult>> SearchDefaultMemoryBandsAsync(MemorySearchRequest request, ILocalMemoryStore memoryStore, IMemoryRecallPlanner recallPlanner, CancellationToken cancellationToken)
@@ -314,7 +346,7 @@ public static class MemoryEndpoints
 
         if (!string.IsNullOrWhiteSpace(request.FocusId))
         {
-            selectedRecords = FocusGraphRecords(selectedRecords, request.FocusId).ToList();
+            selectedRecords = FocusGraphRecords(selectedRecords, request.FocusId, request.FocusLabel).ToList();
         }
 
         selectedRecords = selectedRecords
@@ -330,7 +362,8 @@ public static class MemoryEndpoints
 
         foreach (var record in selectedRecords)
         {
-            var concepts = ExtractGraphConcepts(record, layer).Take(8).ToList();
+            var recordLayer = GetMetadata(record.Metadata, MemoryLayers.LayerKey) ?? layer;
+            var concepts = ExtractGraphConcepts(record, recordLayer).Take(8).ToList();
             recordConcepts[record.Id] = concepts;
 
             foreach (var concept in concepts)
@@ -360,6 +393,20 @@ public static class MemoryEndpoints
                 Weight: weight,
                 X: 50 + Math.Cos(angle) * radius,
                 Y: 50 + Math.Sin(angle) * radius));
+        }
+
+        if (string.IsNullOrWhiteSpace(request.FocusId))
+        {
+            foreach (var pair in selectedRecords.SelectMany(record => (recordConcepts.GetValueOrDefault(record.Id) ?? []).Where(conceptIds.ContainsKey).Distinct(StringComparer.OrdinalIgnoreCase).SelectMany(left => (recordConcepts.GetValueOrDefault(record.Id) ?? []).Where(concept => !concept.Equals(left, StringComparison.OrdinalIgnoreCase) && conceptIds.ContainsKey(concept)).Select(right => OrderedPair(left, right)))).GroupBy(pair => pair, StringComparer.OrdinalIgnoreCase))
+            {
+                var parts = pair.Key.Split('\u001f');
+                if (parts.Length == 2)
+                {
+                    edges.Add(new MemoryGraphEdge(conceptIds[parts[0]], conceptIds[parts[1]], Math.Min(1, pair.Count() / 6.0), "co-occurs"));
+                }
+            }
+
+            return new MemoryGraphResponse(layer, request.Query, selectedRecords.Count, nodes, edges.DistinctBy(edge => $"{edge.Source}|{edge.Target}|{edge.Kind}").ToList());
         }
 
         for (var index = 0; index < selectedRecords.Count; index++)
@@ -429,7 +476,7 @@ public static class MemoryEndpoints
         if (!string.IsNullOrWhiteSpace(focusId))
         {
             focusRecord = candidates.FirstOrDefault(record => record.Id.Equals(focusId, StringComparison.OrdinalIgnoreCase))
-                ?? ToPreview(await memoryStore.GetRecordAsync(layer, focusId, cancellationToken));
+                ?? await GetGraphRecordByIdAsync(memoryStore, layer, focusId, cancellationToken);
 
             if (focusRecord is not null && candidates.All(record => !record.Id.Equals(focusRecord.Id, StringComparison.OrdinalIgnoreCase)))
             {
@@ -451,7 +498,7 @@ public static class MemoryEndpoints
             .Select(record => new
             {
                 Record = record,
-                Concepts = ExtractGraphConcepts(record, layer).ToList()
+                Concepts = ExtractGraphConcepts(record, GetMetadata(record.Metadata, MemoryLayers.LayerKey) ?? layer).ToList()
             })
             .Select(item => new
             {
@@ -461,12 +508,14 @@ public static class MemoryEndpoints
                 Score = focusRecord is not null && item.Record.Id.Equals(focusRecord.Id, StringComparison.OrdinalIgnoreCase) ? 100 : item.Concepts.Count(focusConcepts.Contains)
             })
             .Where(item => item.Score > 0 || focusConcepts.Count == 0)
+            .GroupBy(item => item.Record.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.OrderByDescending(item => item.Score).First())
             .OrderByDescending(item => item.Score)
             .ThenByDescending(item => DateTimeOffset.TryParse(GetMetadata(item.Record.Metadata, "observedAt"), out var observedAt) ? observedAt : DateTimeOffset.MinValue)
             .Take(limit)
             .Select(item => new MemoryGraphRelatedRecord(
                 item.Record.Id,
-                layer,
+                GetMetadata(item.Record.Metadata, MemoryLayers.LayerKey) ?? layer,
                 item.Record.TextPreview,
                 GetMemoryType(item.Record.Metadata),
                 GetMetadata(item.Record.Metadata, MemoryMetadata.ProvenanceKey),
@@ -487,6 +536,26 @@ public static class MemoryEndpoints
 
     private static MemoryCollectionRecordPreview? ToPreview(MemoryRecordDetail? detail) =>
         detail is null ? null : new MemoryCollectionRecordPreview(detail.Id, detail.Text, detail.TextLength, detail.Metadata);
+
+    private static async Task<MemoryCollectionRecordPreview?> GetGraphRecordByIdAsync(ILocalMemoryStore memoryStore, string layer, string id, CancellationToken cancellationToken)
+    {
+        if (!layer.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            return ToPreview(await memoryStore.GetRecordAsync(layer, id, cancellationToken));
+        }
+
+        var collections = await memoryStore.ListCollectionsAsync(cancellationToken);
+
+        foreach (var collection in collections.Where(collection => collection.RecordCount > 0).OrderBy(collection => collection.Name))
+        {
+            if (ToPreview(await memoryStore.GetRecordAsync(collection.Name, id, cancellationToken)) is { } record)
+            {
+                return record with { Metadata = MemoryLayers.WithLayer(record.Metadata, collection.Name) };
+            }
+        }
+
+        return null;
+    }
 
     private static async Task<MemoryRecordTransitionResponse?> SupersedeRecordAsync(
         string collection,
@@ -642,23 +711,45 @@ public static class MemoryEndpoints
 
     private static async Task<IReadOnlyList<MemoryCollectionRecordPreview>> LoadGraphRecordsAsync(ILocalMemoryStore memoryStore, string layer, string? query, int limit, IReadOnlyDictionary<string, string>? filter, CancellationToken cancellationToken)
     {
+        if (layer.Equals("all", StringComparison.OrdinalIgnoreCase))
+        {
+            var records = new List<MemoryCollectionRecordPreview>();
+            var collections = await memoryStore.ListCollectionsAsync(cancellationToken);
+
+            foreach (var collection in collections.Where(collection => collection.RecordCount > 0).OrderBy(collection => collection.Name))
+            {
+                records.AddRange(await LoadGraphRecordsAsync(memoryStore, collection.Name, query, limit, filter, cancellationToken));
+            }
+
+            return records.Take(limit).ToList();
+        }
+
         if (!string.IsNullOrWhiteSpace(query))
         {
             var searched = await memoryStore.SearchAsync(new MemorySearchRequest(layer, query, limit, filter), cancellationToken);
-            return searched.Select(result => new MemoryCollectionRecordPreview(result.Id, result.Text, result.Text.Length, result.Metadata)).ToList();
+            return searched.Select(result => new MemoryCollectionRecordPreview(result.Id, result.Text, result.Text.Length, MemoryLayers.WithLayer(result.Metadata, layer))).ToList();
         }
 
         var inspected = await memoryStore.InspectCollectionAsync(layer, new MemoryCollectionInspectRequest(limit, Filter: filter), cancellationToken);
-        return inspected.Records;
+        return inspected.Records
+            .Select(record => record with { Metadata = MemoryLayers.WithLayer(record.Metadata, layer) })
+            .ToList();
     }
 
-    private static IReadOnlyList<MemoryCollectionRecordPreview> FocusGraphRecords(IReadOnlyList<MemoryCollectionRecordPreview> records, string focusId)
+    private static IReadOnlyList<MemoryCollectionRecordPreview> FocusGraphRecords(IReadOnlyList<MemoryCollectionRecordPreview> records, string focusId, string? focusLabel)
     {
         var focus = records.FirstOrDefault(record => record.Id.Equals(focusId, StringComparison.OrdinalIgnoreCase));
+        var label = string.IsNullOrWhiteSpace(focusLabel) ? null : GraphConceptLabel(focusLabel);
 
         if (focus is null)
         {
-            return records;
+            return string.IsNullOrWhiteSpace(label)
+                ? records
+                : records
+                    .OrderByDescending(record => ExtractGraphConcepts(record, GetMetadata(record.Metadata, MemoryLayers.LayerKey) ?? MemoryLayers.Memory).Contains(label, StringComparer.OrdinalIgnoreCase) ? 100 : 0)
+                    .ThenByDescending(record => ConceptQualityScore(record.Metadata))
+                    .Take(48)
+                    .ToList();
         }
 
         var focusConcepts = ExtractGraphConcepts(focus, GetMetadata(focus.Metadata, MemoryLayers.LayerKey) ?? MemoryLayers.Memory).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -672,19 +763,28 @@ public static class MemoryEndpoints
     {
         var concepts = new List<string>();
 
-        AddConcept(concepts, GetMetadata(record.Metadata, "category"));
-        AddConcept(concepts, GetMetadata(record.Metadata, MemoryMetadata.TypeKey));
-        AddConcept(concepts, GetMetadata(record.Metadata, "topic"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "subject"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "project"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "preference"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "source"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "sourceFile"));
-        AddConcept(concepts, GetMetadata(record.Metadata, "tenant"));
+        AddConcept(concepts, GetMetadata(record.Metadata, MemoryMetadata.TypeKey), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "category"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "topic"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "subcategory"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "project"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "preference"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "interest"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "constraint"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "relation"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "relatedTo"), 1);
+        AddConcept(concepts, GetMetadata(record.Metadata, "tag"), 0);
+        AddConcept(concepts, GetMetadata(record.Metadata, "tags"), 0);
+
+        if (layer.Equals(MemoryLayers.Knowledge, StringComparison.OrdinalIgnoreCase))
+        {
+            AddConcept(concepts, GetMetadata(record.Metadata, "sourceFile"), 1);
+            AddConcept(concepts, GetMetadata(record.Metadata, "source"), 1);
+        }
 
         foreach (var token in ExtractKeywordConcepts(record.TextPreview))
         {
-            AddConcept(concepts, token);
+            AddConcept(concepts, token, 2);
         }
 
         if (concepts.Count == 0)
@@ -697,35 +797,58 @@ public static class MemoryEndpoints
 
     private static IEnumerable<string> ExtractKeywordConcepts(string text)
     {
-        var ignored = new HashSet<string>(["about", "after", "again", "also", "because", "before", "being", "could", "first", "from", "have", "into", "local", "memory", "more", "need", "needs", "only", "over", "prefer", "prefers", "should", "that", "their", "there", "these", "this", "user", "when", "with", "would"], StringComparer.OrdinalIgnoreCase);
+        var ignored = new HashSet<string>(["about", "after", "again", "also", "because", "before", "being", "could", "first", "from", "have", "into", "local", "memory", "more", "need", "needs", "only", "over", "prefer", "prefers", "should", "that", "their", "there", "these", "this", "user", "when", "with", "would", "said", "stored", "profile", "fact", "facts", "information", "record", "records", "source", "conversation", "assistant", "model"], StringComparer.OrdinalIgnoreCase);
         return text.Split([' ', '\n', '\r', '\t', ',', '.', ';', ':', '/', '\\', '(', ')', '[', ']', '{', '}', '"', '\''], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
             .Select(token => token.Trim('-', '_').ToLowerInvariant())
-            .Where(token => token.Length is >= 4 and <= 28 && token.Any(char.IsLetter) && !ignored.Contains(token))
+            .Where(token => token.Length is >= 5 and <= 28 && token.Any(char.IsLetter) && !ignored.Contains(token))
             .GroupBy(token => token, StringComparer.OrdinalIgnoreCase)
             .OrderByDescending(group => group.Count())
             .ThenBy(group => group.Key, StringComparer.OrdinalIgnoreCase)
-            .Take(5)
+            .Take(3)
             .Select(group => group.Key);
     }
 
-    private static void AddConcept(ICollection<string> concepts, string? value)
+    private static void AddConcept(ICollection<string> concepts, string? value, int quality)
     {
         if (!string.IsNullOrWhiteSpace(value))
         {
-            var label = GraphConceptLabel(value);
-
-            if (!IsGenericGraphConcept(label))
+            foreach (var label in SplitConceptValues(value).Select(GraphConceptLabel))
             {
-                concepts.Add(label);
+                if (!IsGenericGraphConcept(label) && ConceptInterestingness(label) >= quality)
+                {
+                    concepts.Add(label);
+                }
             }
         }
+    }
+
+    private static IEnumerable<string> SplitConceptValues(string value) =>
+        value.Split([',', ';', '|'], StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+    private static int ConceptQualityScore(IReadOnlyDictionary<string, string> metadata) =>
+        new[] { MemoryMetadata.TypeKey, "category", "subcategory", "topic", "project", "preference", "interest", "constraint", "relation", "relatedTo", "tag", "tags" }
+            .Count(key => !string.IsNullOrWhiteSpace(GetMetadata(metadata, key)));
+
+    private static int ConceptInterestingness(string value)
+    {
+        var normalized = value.Trim().ToLowerInvariant();
+        if (InterestingConcepts.Contains(normalized)) return 0;
+        if (normalized.Length <= 3) return 3;
+        if (IsGenericGraphConcept(normalized)) return 3;
+        if (normalized.Contains(' ') || normalized.Contains('-')) return 1;
+        return 2;
     }
 
     private static bool IsGenericGraphConcept(string value)
     {
         var normalized = value.Trim().ToLowerInvariant();
-        return normalized is "user" or "profile" or "memory" or "model memory" or "passive interaction" or "memory reflection" or "session summary" or "consolidated session" or "core memory";
+        return normalized is "user" or "profile" or "memory" or "model memory" or "passive interaction" or "memory reflection" or "session summary" or "consolidated session" or "core memory" or "fact" or "facts" or "source turn" or "tool call" or "passive extraction" or "accepted" or "active" or "unknown";
     }
+
+    private static readonly HashSet<string> InterestingConcepts = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "identity", "personal", "relationship", "preference", "opinion", "interest", "goal", "project", "constraint", "knowledge", "document", "invoice", "manual", "workflow"
+    };
 
     private static string GraphConceptLabel(string value)
     {
@@ -758,8 +881,12 @@ public static class MemoryEndpoints
     private static string OrderedPair(string left, string right) =>
         string.Compare(left, right, StringComparison.OrdinalIgnoreCase) <= 0 ? $"{left}\u001f{right}" : $"{right}\u001f{left}";
 
-    private static string NormalizeGraphLayer(string layer) =>
-        layer.Equals(MemoryLayers.Knowledge, StringComparison.OrdinalIgnoreCase) ? MemoryLayers.Knowledge : MemoryLayers.Memory;
+    private static string NormalizeGraphLayer(string layer) => layer.ToLowerInvariant() switch
+    {
+        MemoryLayers.Knowledge => MemoryLayers.Knowledge,
+        "all" => "all",
+        _ => MemoryLayers.Memory
+    };
 
     private static IReadOnlyList<MemoryCollectionBand> GetDefaultCollections() =>
     [
@@ -898,7 +1025,7 @@ public static class MemoryEndpoints
 
     private sealed record MemoryResetEverythingRequest(string Confirm);
 
-    private sealed record MemoryResetEverythingResponse(int DeletedCollectionCount, IReadOnlyList<string> DeletedCollections, int DeletedSqliteRows);
+    private sealed record MemoryResetEverythingResponse(int DeletedCollectionCount, IReadOnlyList<string> DeletedCollections, int DeletedSqliteRows, int DeletedLegacySessionFiles);
 
     private static IReadOnlyList<MemorySearchResult> OrderByIds(IReadOnlyList<MemorySearchResult> candidates, IReadOnlyList<string> ids, int limit)
     {

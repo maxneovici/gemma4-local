@@ -142,6 +142,7 @@ builder.Services.AddSingleton<ILocalMemoryStore>(serviceProvider =>
     };
 });
 builder.Services.AddSingleton<IFoundationUserProfileStore, EfFoundationUserProfileStore>();
+builder.Services.AddSingleton<IInitialProfileMemorySeeder, InitialProfileMemorySeeder>();
 builder.Services.AddSingleton<IDocumentService, DocumentService>();
 builder.Services.AddSingleton<IApiIntegrationRegistry, EfApiIntegrationRegistry>();
 builder.Services.AddSingleton<IAssistantSessionStore, EfAssistantSessionStore>();
@@ -162,6 +163,7 @@ builder.Services.AddSingleton<IMemoryConsolidationJobStore, EfMemoryConsolidatio
 builder.Services.AddSingleton<IMemoryConsolidationService, MemoryConsolidationService>();
 builder.Services.AddSingleton<IMemoryReflectionService, MemoryReflectionService>();
 builder.Services.AddSingleton<IMemoryRecallPlanner, MemoryRecallPlanner>();
+builder.Services.AddSingleton<IMemoryWriter, MemoryWriter>();
 builder.Services.AddSingleton<ISkillRegistry, FileSkillRegistry>();
 builder.Services.AddSingleton<IAssistantOrchestrator, AssistantOrchestrator>();
 builder.Services.AddHostedService<OllamaProcessHostedService>();

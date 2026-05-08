@@ -66,6 +66,7 @@ public sealed record BackgroundJobListResponse(
     int ProgressCurrent,
     int ProgressTotal,
     string? StatusMessage,
+    string? Result,
     string? Error,
     DateTimeOffset UpdatedAt);
 

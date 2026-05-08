@@ -32,6 +32,8 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecal
         var collection = GetMetadata(result, "collection");
         var kind = GetMetadata(result, "kind");
         var topic = GetMetadata(result, "topic");
+        var relation = GetMetadata(result, "relation");
+        var relatedTo = GetMetadata(result, "relatedTo");
         var tenant = GetMetadata(result, "tenant");
         var metadata = string.Join(", ", new[]
         {
@@ -41,6 +43,8 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecal
             chunk is null ? null : $"chunk={chunk}",
             category is null ? null : $"category={category}",
             topic is null ? null : $"topic={topic}",
+            relation is null ? null : $"relation={relation}",
+            relatedTo is null ? null : $"relatedTo={relatedTo}",
             tenant is null ? null : $"tenant={tenant}"
         }.Where(item => item is not null));
 

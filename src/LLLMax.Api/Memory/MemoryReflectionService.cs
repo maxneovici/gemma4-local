@@ -6,6 +6,7 @@ namespace LLLMax.Api.Memory;
 
 public sealed class MemoryReflectionService(
     ILocalMemoryStore memoryStore,
+    IMemoryWriter memoryWriter,
     ILocalChatClient chatClient,
     IRuntimeModelSettings runtimeModels) : IMemoryReflectionService
 {
@@ -32,23 +33,36 @@ public sealed class MemoryReflectionService(
         {
             var text = fact.Text.Trim();
             var category = string.IsNullOrWhiteSpace(fact.Category) ? "profile" : fact.Category.Trim();
+            var memoryType = NormalizeFactMemoryType(fact.MemoryType, category, fact.Relation, text);
+            var subcategory = string.IsNullOrWhiteSpace(fact.Subcategory) ? SecondaryCategory(category, memoryType) : fact.Subcategory.Trim();
             var topic = fact.Topic?.Trim() ?? string.Empty;
             var subject = string.IsNullOrWhiteSpace(fact.Subject) ? "user" : fact.Subject.Trim();
             var existing = FindMatchingFact(existingProfile.Facts, text, category, topic, subject);
             var mergeKey = MergeKey(subject, category, topic, text);
-            var metadata = MemoryMetadata.Build(new Dictionary<string, string>
+            var rawMetadata = new Dictionary<string, string>
             {
                 ["kind"] = "canonical_profile_fact",
                 ["category"] = category,
+                ["subcategory"] = subcategory,
                 ["topic"] = topic,
                 ["subject"] = subject,
                 ["source"] = "memory_reflection",
                 ["mergeKey"] = mergeKey
-            }, MemoryLayers.Memory, text, "memory_reflection", category, sourceRecordId: existing?.Id, confidence: fact.Confidence ?? existing?.Confidence ?? 0.7);
+            };
+
+            if (!string.IsNullOrWhiteSpace(fact.Relation)) rawMetadata["relation"] = fact.Relation.Trim();
+            if (!string.IsNullOrWhiteSpace(fact.RelatedTo)) rawMetadata["relatedTo"] = fact.RelatedTo.Trim();
+
+            var metadata = MemoryMetadata.Build(rawMetadata, MemoryLayers.Memory, text, "memory_reflection", memoryType, sourceRecordId: existing?.Id, confidence: fact.Confidence ?? existing?.Confidence ?? 0.7);
+
+            if (MemoryWritePolicy.ShouldSkipProfileMemory(text, metadata))
+            {
+                continue;
+            }
 
             if (existing is null)
             {
-                await memoryStore.UpsertAsync(new MemoryUpsertRequest(CanonicalCollection, text, metadata), cancellationToken);
+                await memoryWriter.UpsertOrReinforceAsync(new MemoryUpsertRequest(CanonicalCollection, text, metadata), cancellationToken);
             }
             else
             {
@@ -77,6 +91,7 @@ public sealed class MemoryReflectionService(
             {
                 ["kind"] = "memory_category",
                 ["category"] = "memory_schema",
+                ["subcategory"] = name,
                 ["topic"] = name,
                 ["subject"] = "memory_graph",
                 ["source"] = "memory_reflection"
@@ -88,7 +103,7 @@ public sealed class MemoryReflectionService(
             }
             else if (existing is null || string.IsNullOrWhiteSpace(existing.Description))
             {
-                await memoryStore.UpsertAsync(new MemoryUpsertRequest(CanonicalCollection, text, metadata), cancellationToken);
+                await memoryWriter.UpsertOrReinforceAsync(new MemoryUpsertRequest(CanonicalCollection, text, metadata), cancellationToken);
             }
 
             writtenCategories++;
@@ -160,8 +175,8 @@ public sealed class MemoryReflectionService(
             Model: model ?? runtimeModels.GetCoordinatorModel(),
             Messages:
             [
-                new LocalChatMessage("system", "Reflect on local profile memories and produce a canonical user profile. Return exactly one JSON object with summary, facts, and categories. Facts must be explicit or strongly repeated; related facts can coexist. Do not invent, do not resolve ambiguity unless source says so, and do not store secrets. Categories are suggested graph dimensions the assistant can use later."),
-                new LocalChatMessage("user", $"Profile memory source records:\n{sourceText}\n\nJSON shape: {{\"summary\":\"...\",\"facts\":[{{\"text\":\"...\",\"category\":\"gaming\",\"topic\":\"path_of_exile\",\"subject\":\"user\",\"confidence\":0.9}}],\"categories\":[{{\"name\":\"gaming\",\"description\":\"...\",\"examples\":[\"...\"]}}]}}")
+                new LocalChatMessage("system", "Reflect on local profile memories and produce a canonical user profile. Return exactly one JSON object with summary, facts, and categories. Facts must be explicit or strongly repeated; related facts can coexist. kind=canonical_profile_fact will be applied by the app. memoryType is the primary recall axis and must be identity, relationship, preference, opinion, interest, goal, project, constraint, or fact. If a fact names a family member, partner, friend, pet, coworker, workplace relationship, or another person/entity connected to the user, set memoryType=relationship and include relation/relatedTo when known. category is secondary metadata only; do not use category as a replacement for memoryType. Do not invent, do not resolve ambiguity unless source says so, and do not store secrets. Categories are optional subcategory/schema hints for graph organization and must not be required for recall."),
+                new LocalChatMessage("user", $"Profile memory source records:\n{sourceText}\n\nJSON shape: {{\"summary\":\"...\",\"facts\":[{{\"text\":\"A named person is connected to the user as a close relation.\",\"category\":\"profile\",\"subcategory\":\"family\",\"topic\":\"named_person\",\"subject\":\"named person\",\"memoryType\":\"relationship\",\"relation\":\"close_relation\",\"relatedTo\":\"user\",\"confidence\":0.9}}],\"categories\":[{{\"name\":\"family\",\"description\":\"Relationship subcategory for family and close people.\",\"examples\":[\"close_relation\"]}}]}}")
             ],
             Temperature: 0.1), cancellationToken);
 
@@ -236,6 +251,33 @@ public sealed class MemoryReflectionService(
 
     private static string BetterFactText(string existing, string candidate) =>
         candidate.Length > existing.Length && candidate.Length <= existing.Length + 140 ? candidate : existing;
+
+    private static string NormalizeFactMemoryType(string? memoryType, string category, string? relation, string text)
+    {
+        var normalized = MemoryMetadata.NormalizeType(memoryType ?? category);
+
+        if (normalized == "relationship" || !string.IsNullOrWhiteSpace(relation) || LooksLikeRelationship(text))
+        {
+            return "relationship";
+        }
+
+        return normalized;
+    }
+
+    private static string SecondaryCategory(string category, string memoryType) =>
+        category.Equals("profile", StringComparison.OrdinalIgnoreCase) ? memoryType : category;
+
+    private static bool LooksLikeRelationship(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return ContainsAny(lower,
+            " brother ", " sister ", " mother ", " father ", " parent ", " spouse ", " wife ", " husband ", " partner ",
+            " fiance", " fiancée", " friend ", " daughter ", " son ", " child ", " coworker ", " colleague ", " pet ",
+            "is connected to the user", "related to the user", "the user's");
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static string MergeKey(string subject, string category, string topic, string text) =>
         $"{NormalizeKey(subject)}:{NormalizeKey(category)}:{NormalizeKey(string.IsNullOrWhiteSpace(topic) ? "general" : topic)}";

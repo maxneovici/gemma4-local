@@ -86,8 +86,8 @@
       </div>
     </section>
   </div>
-  <main class="shell">
-    <aside class="panel left-panel">
+  <main id="appShell" class="shell">
+    <aside class="panel left-panel" aria-label="Session drawer">
       <div class="brand">
         <img src="/icon.svg" alt="LLLMax logo">
         <div>
@@ -254,6 +254,7 @@
     </section>
 
     <aside class="panel right-panel icon-dock">
+      <button id="toggleLeftPanel" type="button" title="Sessions" aria-label="Sessions"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5h16M4 12h16M4 19h10"/><path d="M18 17l2 2-2 2"/></svg></button>
       <button id="openProfileModal" type="button" title="Profile" aria-label="Profile"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8Z"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg></button>
       <button id="openMemoryDashboard" type="button" title="Memory dashboard" aria-label="Memory dashboard"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="2.4"/><circle cx="5" cy="7" r="2"/><circle cx="19" cy="7" r="2"/><circle cx="7" cy="19" r="2"/><circle cx="18" cy="18" r="2"/><path d="m6.8 8.2 3.4 2.3M13.8 10.4 17.3 8M13.5 13.5l3 3M10.3 13.6l-2.2 3.6"/></svg></button>
       <button data-open-operations="runtime" type="button" title="Runtime" aria-label="Runtime"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 1 16 0"/><path d="M12 12 16 8"/><path d="M4 16h16"/></svg></button>

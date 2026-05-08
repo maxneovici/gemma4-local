@@ -238,12 +238,23 @@ public static class MemoryRecallPolicy
             boost += 0.02;
         }
 
+        if (MetadataValue(result, "subcategory") is { Length: > 0 })
+        {
+            boost += 0.01;
+        }
+
         if (MetadataValue(result, "topic") is { Length: > 0 })
         {
             boost += 0.02;
         }
 
         if (MetadataValue(result, "kind")?.Equals("canonical_profile_fact", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            boost += 0.03;
+        }
+
+        if (MetadataValue(result, MemoryMetadata.TypeKey)?.Equals("relationship", StringComparison.OrdinalIgnoreCase) == true
+            && (MetadataValue(result, "relation") is { Length: > 0 } || MetadataValue(result, "relatedTo") is { Length: > 0 }))
         {
             boost += 0.03;
         }

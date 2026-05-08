@@ -522,6 +522,7 @@ Personal context and freshness rules:
 - The memory graph is self-evolving: when storing memory, choose useful metadata keys yourself (for example category, topic, subject, project, tenant, preference, source, confidence, or relation) so future retrieval can join related memories without code changes. Related memories can coexist; do not assume one fact replaces another unless the user says it changed.
 - Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
 - Use remembered profile information to personalize tone and defaults, but never let personality override tool-use safety, routing, citations, or local-only constraints.
+- When answering personal recall questions, only state facts that are explicit in foundation profile data, memory text, or tool results. Do not infer unstated likes, enjoyment, favorites, relationships, or motivations from adjacent facts or metadata; if the exact fact is missing, say it is not remembered.
 - When memory contains multiple related names or labels, answer the exact attribute requested by the user. Do not substitute a project codename, person name, device name, location, or preference for another adjacent fact.
 - Do not identify yourself as the underlying model. Your user-facing assistant display name is {assistantName}.
 - Assistant description/persona: {assistantDescription}
@@ -899,8 +900,8 @@ Browsed source bundle:
         }
 
         return freshBrowsingRequest
-            ? $"Fresh/current request: memory below may only identify sources, interests, or browse targets. Do not use memory text as current facts, headlines, dates, or summaries. Personal memories are always included when relevant; related facts can coexist unless metadata says one supersedes another.{Environment.NewLine}{builder}"
-            : $"Relevant local memory. Personal profile memories are intentionally included on every turn when retrieval finds them; treat related memories as a graph of complementary facts, not a single exclusive slot unless metadata says superseded or invalid.{Environment.NewLine}{builder}";
+            ? $"Fresh/current request: memory below may only identify sources, interests, or browse targets. Do not use memory text as current facts, headlines, dates, or summaries. Personal memories are always included when relevant; related facts can coexist unless metadata says one supersedes another. Do not infer unstated preferences or enjoyment from relationships or adjacent facts.{Environment.NewLine}{builder}"
+            : $"Relevant local memory. Personal profile memories are intentionally included on every turn when retrieval finds them; treat related memories as a graph of complementary facts, not a single exclusive slot unless metadata says superseded or invalid. Answer only from explicit memory text/profile facts; do not add implied preferences, enjoyment, or motivations.{Environment.NewLine}{builder}";
     }
 
     private static string FormatMemoryMetadata(IReadOnlyDictionary<string, string> metadata)
@@ -917,6 +918,8 @@ Browsed source bundle:
             MetadataValue(metadata, "category") is { } category ? $"category={category}" : null,
             MetadataValue(metadata, "topic") is { } topic ? $"topic={topic}" : null,
             MetadataValue(metadata, "subject") is { } subject ? $"subject={subject}" : null,
+            MetadataValue(metadata, "relation") is { } relation ? $"relation={relation}" : null,
+            MetadataValue(metadata, "relatedTo") is { } relatedTo ? $"relatedTo={relatedTo}" : null,
             MetadataValue(metadata, "observedAt") is { } observedAt ? $"observedAt={observedAt}" : null,
             MetadataValue(metadata, "sourceFile") is { } sourceFile ? $"sourceFile={sourceFile}" : null,
             MetadataValue(metadata, "chunkIndex") is { } chunkIndex ? $"chunk={chunkIndex}" : null
@@ -1355,19 +1358,23 @@ Browsed source bundle:
     {
         var normalized = Regex.Replace(message, "\\s+", " ").Trim();
 
-        if (normalized.Length < 12 || normalized.Length > 900)
+        if (normalized.Length < 12 || normalized.Length > 900 || IsLikelyRecallQuestion(normalized))
         {
             return null;
         }
 
         try
         {
+            var profile = await foundationProfile.GetAsync(cancellationToken);
+            var familyContext = string.IsNullOrWhiteSpace(profile.FamilyAndRelations)
+                ? "No explicit foundation family/relations field is set."
+                : profile.FamilyAndRelations.Trim();
             var response = await chatClient.ChatAsync(new LocalChatRequest(
                 Model: runtimeModels.GetCoordinatorModel(),
                 Messages:
                 [
-                    new LocalChatMessage("system", "Decide whether a user message contains a durable personal memory worth saving for future personalization. Work in any language. Return exactly one compact JSON object: {\"shouldStore\":true|false,\"text\":\"...\",\"category\":\"...\",\"topic\":\"...\",\"subject\":\"user\",\"memoryType\":\"identity|relationship|preference|opinion|interest|goal|project|constraint|fact\",\"confidence\":0.0-1.0,\"reviewRequired\":true|false}. Store only user-authored stable facts, preferences, identity details, relationships, recurring interests, projects, workflows, communication preferences, long-term goals, opinions, constraints, or user-requested reminders. Do not store transient chat commands, test instructions, assistant claims, secrets, credentials, medical/legal/financial sensitive details, or raw text that includes an instruction like 'just say'. If storing, rewrite as a concise neutral fact in the user's language and remove task-only wording. Set reviewRequired=true for low confidence, conflict, or potentially sensitive items."),
-                    new LocalChatMessage("user", normalized)
+                    new LocalChatMessage("system", "Decide whether a user message contains durable personal memory worth saving for future personalization. Work in any language. Return exactly one compact JSON object: {\"shouldStore\":true|false,\"text\":\"...\",\"category\":\"profile\",\"subcategory\":\"...\",\"topic\":\"...\",\"subject\":\"user\",\"relation\":\"...\",\"relatedTo\":\"user\",\"memoryType\":\"identity|relationship|preference|opinion|interest|goal|project|constraint|fact\",\"confidence\":0.0-1.0,\"reviewRequired\":true|false}. memoryType is the primary recall axis. category must remain profile for personal memories; use subcategory only as secondary metadata such as family, pets, gaming, music, cooking, work, location, communication, goals, privacy. If the message names family, partners, friends, pets, coworkers, or another person/entity related to the user, set memoryType=relationship, include relation/relatedTo when known, and write it as a stable canonical-style fact. Store only user-authored stable facts, preferences, identity details, relationships, recurring interests, projects, workflows, communication preferences, long-term goals, opinions, constraints, or user-requested reminders. Do not store transient chat commands, test instructions, assistant claims, secrets, credentials, medical/legal/financial sensitive details, or raw text that includes an instruction like 'just say'. If storing, rewrite as a concise neutral fact in the user's language and remove task-only wording. Set reviewRequired=true for low confidence, conflict, or potentially sensitive items."),
+                    new LocalChatMessage("user", $"Foundation family/relations context, explicit and authoritative for resolving named people:\n{familyContext}\n\nCurrent user-authored message to classify:\n{normalized}")
                 ],
                 Temperature: 0.1,
                 MaxOutputTokens: 220), cancellationToken);
@@ -1379,18 +1386,24 @@ Browsed source bundle:
                 return null;
             }
 
+            var metadata = new Dictionary<string, string>
+            {
+                ["agent"] = agentName,
+                ["kind"] = "profile_fact",
+                ["category"] = string.IsNullOrWhiteSpace(payload.Category) ? "profile" : payload.Category.Trim(),
+                ["subcategory"] = payload.Subcategory?.Trim() ?? string.Empty,
+                ["topic"] = payload.Topic?.Trim() ?? string.Empty,
+                ["subject"] = string.IsNullOrWhiteSpace(payload.Subject) ? "user" : payload.Subject.Trim(),
+                ["source"] = "passive_interaction"
+            };
+
+            if (IsAtomicRelation(payload.Relation)) metadata["relation"] = payload.Relation!.Trim();
+            if (IsAtomicRelation(payload.RelatedTo)) metadata["relatedTo"] = payload.RelatedTo!.Trim();
+
             return new MemoryUpsertRequest(
                 Collection: MemoryLayers.Memory,
                 Text: payload.Text.Trim(),
-                Metadata: MemoryMetadata.Build(new Dictionary<string, string>
-                {
-                    ["agent"] = agentName,
-                    ["kind"] = "profile_fact",
-                    ["category"] = string.IsNullOrWhiteSpace(payload.Category) ? "profile" : payload.Category.Trim(),
-                    ["topic"] = payload.Topic?.Trim() ?? string.Empty,
-                    ["subject"] = string.IsNullOrWhiteSpace(payload.Subject) ? "user" : payload.Subject.Trim(),
-                    ["source"] = "passive_interaction"
-                }, MemoryLayers.Memory, payload.Text.Trim(), "passive_extraction", payload.MemoryType, conversationId, "user", confidence: Math.Clamp(payload.Confidence ?? 0.7, 0, 1), reviewRequired: payload.ReviewRequired));
+                Metadata: MemoryMetadata.Build(metadata, MemoryLayers.Memory, payload.Text.Trim(), "passive_extraction", payload.MemoryType, conversationId, "user", confidence: Math.Clamp(payload.Confidence ?? 0.7, 0, 1), reviewRequired: payload.ReviewRequired));
         }
         catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException or JsonException)
         {
@@ -1405,5 +1418,24 @@ Browsed source bundle:
         return start >= 0 && end > start ? text[start..(end + 1)] : null;
     }
 
-    private sealed record PassiveProfileMemoryPayload(bool ShouldStore, string? Text, string? Category, string? Topic, string? Subject, string? MemoryType, double? Confidence, bool ReviewRequired);
+    private static bool IsLikelyRecallQuestion(string message)
+    {
+        var lower = message.ToLowerInvariant();
+        return lower.Contains('?')
+            || lower.StartsWith("what do you remember", StringComparison.Ordinal)
+            || lower.StartsWith("answer exactly", StringComparison.Ordinal)
+            || lower.StartsWith("summarize", StringComparison.Ordinal)
+            || lower.StartsWith("connect ", StringComparison.Ordinal)
+            || lower.Contains("recall check", StringComparison.Ordinal);
+    }
+
+    private static bool IsAtomicRelation(string? value) =>
+        !string.IsNullOrWhiteSpace(value)
+        && value.Length <= 80
+        && !value.Contains(',')
+        && !value.Contains(';')
+        && !value.Contains(" is ", StringComparison.OrdinalIgnoreCase)
+        && !value.Contains(" connected ", StringComparison.OrdinalIgnoreCase);
+
+    private sealed record PassiveProfileMemoryPayload(bool ShouldStore, string? Text, string? Category, string? Subcategory, string? Topic, string? Subject, string? Relation, string? RelatedTo, string? MemoryType, double? Confidence, bool ReviewRequired);
 }

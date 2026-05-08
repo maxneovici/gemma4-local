@@ -139,6 +139,7 @@ public sealed record MemoryGraphRequest(
     string? Query = null,
     int Limit = 80,
     string? FocusId = null,
+    string? FocusLabel = null,
     IReadOnlyList<string>? Types = null,
     IReadOnlyDictionary<string, string>? Filter = null);
 
