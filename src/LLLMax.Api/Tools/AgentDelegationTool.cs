@@ -42,7 +42,9 @@ public sealed class AgentDelegationTool(IServiceProvider serviceProvider, IOptio
                 : async (runtimeEvent, token) => await invocation.OnEvent(runtimeEvent with
                 {
                     Tool = runtimeEvent.Tool is null ? null : $"{arguments.Agent}/{runtimeEvent.Tool}",
-                    Content = $"[{arguments.Agent}] {runtimeEvent.Content}"
+                    Content = runtimeEvent.Kind.Equals("model_delta", StringComparison.OrdinalIgnoreCase)
+                        ? runtimeEvent.Content
+                        : $"[{arguments.Agent}] {runtimeEvent.Content}"
                 }, token)), cancellationToken);
 
         await PublishAsync(invocation, new AgentRuntimeEvent(

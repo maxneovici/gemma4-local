@@ -117,11 +117,13 @@ public sealed class AgentRuntime(
                 await PublishAsync(request, new AgentRuntimeEvent(
                     Kind: "model_started",
                     Content: iteration == 0 ? "Choosing the next step..." : "Summarizing tool results..."), cancellationToken);
-                response = await chatClient.ChatAsync(new LocalChatRequest(
-                    Model: route.Model,
-                    Messages: messages,
-                    EnableThinking: route.EnableThinking,
-                    Temperature: request.Temperature ?? route.Temperature), cancellationToken);
+                response = !request.AllowTools && request.OnEvent is not null
+                    ? await StreamModelResponseAsync(agent, route, request, messages, cancellationToken)
+                    : await chatClient.ChatAsync(new LocalChatRequest(
+                        Model: route.Model,
+                        Messages: messages,
+                        EnableThinking: route.EnableThinking,
+                        Temperature: request.Temperature ?? route.Temperature), cancellationToken);
             }
 
             reasoningSteps.Add(new ReasoningStep("model", response.Response, DateTimeOffset.UtcNow));
@@ -253,6 +255,9 @@ public sealed class AgentRuntime(
             {
                 var failure = $"Tool {tool.Name} failed: {exception.Message}";
                 var completedAt = DateTimeOffset.UtcNow;
+                var canContinueAfterBrowseFailure = tool.Name.Equals("web_browse", StringComparison.OrdinalIgnoreCase)
+                    && RequiresFreshBrowsing(request.Message)
+                    && (pendingFreshBrowseUrls.Count > 0 || toolResults.Any(IsSuccessfulWebBrowseResult));
                 toolTraces[traceIndex] = toolTraces[traceIndex] with
                 {
                     Status = "failed",
@@ -261,13 +266,20 @@ public sealed class AgentRuntime(
                     DurationMs = (completedAt - startedAt).TotalMilliseconds
                 };
                 toolResults.Add(new ToolExecutionResult(tool.Name, failure));
-                reasoningSteps.Add(new ReasoningStep("tool_error", failure, DateTimeOffset.UtcNow));
+                reasoningSteps.Add(new ReasoningStep(canContinueAfterBrowseFailure ? "tool_warning" : "tool_error", failure, DateTimeOffset.UtcNow));
                 await PublishAsync(request, new AgentRuntimeEvent(
                     Kind: "tool_failed",
                     Content: failure,
                     Tool: tool.Name,
                     Result: failure), cancellationToken);
                 response = response with { Response = failure };
+
+                if (canContinueAfterBrowseFailure)
+                {
+                    messages = AppendToolResult(messages, response.Response, tool.Name, failure, RequiresFreshBrowsing(request.Message));
+                    continue;
+                }
+
                 break;
             }
 
@@ -425,6 +437,45 @@ public sealed class AgentRuntime(
 
     private static Task PublishAsync(AgentRunRequest request, AgentRuntimeEvent runtimeEvent, CancellationToken cancellationToken) =>
         request.OnEvent?.Invoke(runtimeEvent, cancellationToken) ?? Task.CompletedTask;
+
+    private async Task<LocalChatResponse> StreamModelResponseAsync(
+        AgentDefinition agent,
+        AgentModelRoute route,
+        AgentRunRequest request,
+        IReadOnlyList<LocalChatMessage> messages,
+        CancellationToken cancellationToken)
+    {
+        var builder = new StringBuilder();
+        LocalChatStreamChunk? finalChunk = null;
+
+        await foreach (var chunk in chatClient.StreamChatAsync(new LocalChatRequest(
+            Model: route.Model,
+            Messages: messages,
+            EnableThinking: route.EnableThinking,
+            Temperature: request.Temperature ?? route.Temperature), cancellationToken))
+        {
+            finalChunk = chunk;
+
+            if (string.IsNullOrEmpty(chunk.Content))
+            {
+                continue;
+            }
+
+            builder.Append(chunk.Content);
+            await PublishAsync(request, new AgentRuntimeEvent(
+                Kind: "model_delta",
+                Content: chunk.Content,
+                Arguments: new Dictionary<string, string> { ["agent"] = agent.Name }), cancellationToken);
+        }
+
+        return new LocalChatResponse(
+            Model: finalChunk?.Model ?? route.Model,
+            Response: builder.ToString(),
+            TotalDurationMs: finalChunk?.TotalDurationMs,
+            PromptEvalCount: finalChunk?.PromptEvalCount,
+            EvalCount: finalChunk?.EvalCount,
+            TokensPerSecond: finalChunk?.TokensPerSecond);
+    }
 
     private string BuildSystemPrompt(AgentDefinition agent, string skillContext, string memoryContext, string toolContext, string subagentContext)
     {
@@ -602,13 +653,13 @@ Loop guardrails:
         && IsToolAllowed(agent, "delegate_to_agent")
         && RequiresNewsDigest(request.Message)
         && pendingFreshBrowseCount == 0
-        && toolResults.Count(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)) >= 1
+        && toolResults.Any(IsSuccessfulWebBrowseResult)
         && !toolResults.Any(result => result.Tool.Equals("delegate_to_agent", StringComparison.OrdinalIgnoreCase));
 
     private static ParsedToolCall CreateNewsDigestDelegationCall(string originalMessage, IReadOnlyList<ToolExecutionResult> toolResults)
     {
         var browsedSources = toolResults
-            .Where(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase))
+            .Where(IsSuccessfulWebBrowseResult)
             .Select(result => result.Result)
             .ToList();
         var sourceBundle = string.Join("\n\n---\n\n", browsedSources);
@@ -692,7 +743,7 @@ Browsed source bundle:
                 continue;
             }
 
-            foreach (Match match in Regex.Matches(line, @"(?<![@\w/-])(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+(?::\d+)?(?:/[^\s<>()\]]*)?", RegexOptions.IgnoreCase))
+            foreach (Match match in Regex.Matches(line, @"(?<![@\w/-])(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)*\.[a-z][a-z0-9-]{1,}(?::\d+)?(?:/[^\s<>()\]]*)?", RegexOptions.IgnoreCase))
             {
                 var normalized = NormalizeBrowseTarget(match.Value);
 
@@ -726,10 +777,24 @@ Browsed source bundle:
             candidate = $"https://{candidate}";
         }
 
-        return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+        return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https" && HasValidPublicSuffix(uri.Host)
             ? uri.ToString()
             : null;
     }
+
+    private static bool HasValidPublicSuffix(string host)
+    {
+        var suffix = host.Split('.', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return suffix is { Length: >= 2 } && suffix.Any(char.IsLetter);
+    }
+
+    private static bool IsSuccessfulWebBrowseResult(ToolExecutionResult result) =>
+        result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)
+        && !IsToolFailureResult(result.Result);
+
+    private static bool IsToolFailureResult(string result) =>
+        result.StartsWith("Tool ", StringComparison.OrdinalIgnoreCase)
+        && result.Contains(" failed:", StringComparison.OrdinalIgnoreCase);
 
     private static bool LooksLikeFilename(string value)
     {

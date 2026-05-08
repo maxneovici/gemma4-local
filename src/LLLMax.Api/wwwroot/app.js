@@ -27,7 +27,7 @@ const state = {
   activeAssistantId: null,
   editingAgent: null,
   inspectEvents: [],
-  inspectCollapsed: false,
+  inspectCollapsed: true,
   inspectDismissed: false
 };
 
@@ -202,7 +202,7 @@ function clearResponseDetails() {
 
 function resetInspectPanel() {
   state.inspectEvents = [];
-  state.inspectCollapsed = false;
+  state.inspectCollapsed = true;
   state.inspectDismissed = false;
   renderInspectPanel();
 }
@@ -213,7 +213,24 @@ function appendInspectEvent(event) {
   const item = inspectEventFromStream(event);
   if (!item) return;
 
-  state.inspectEvents = [...state.inspectEvents, item].slice(-24);
+  if (item.mergeKey) {
+    const nextEvents = [...state.inspectEvents];
+    const index = nextEvents.findIndex(existing => existing.mergeKey === item.mergeKey);
+
+    if (index >= 0) {
+      nextEvents[index] = {
+        ...nextEvents[index],
+        ...item,
+        content: truncateEnd((nextEvents[index].content ?? '') + (item.content ?? ''), 900),
+        tick: (nextEvents[index].tick ?? 0) + 1
+      };
+      state.inspectEvents = nextEvents.slice(-24);
+      renderInspectPanel();
+      return;
+    }
+  }
+
+  state.inspectEvents = [...state.inspectEvents, { ...item, tick: Date.now() }].slice(-24);
   renderInspectPanel();
 }
 
@@ -225,6 +242,7 @@ function inspectEventFromStream(event) {
   const result = runtimeEvent?.result;
   const args = runtimeEvent?.arguments ?? {};
   const target = toolTraceTarget(tool, args);
+  const isDelta = kind === 'model_delta';
   const preview = result ? toolResultPreview(result) : event.content;
 
   return {
@@ -233,7 +251,8 @@ function inspectEventFromStream(event) {
     label: progressLabel(kind, tool),
     status: progressStatus(kind),
     target,
-    content: truncateMiddle(preview, 520)
+    content: isDelta ? preview : truncateMiddle(preview, 520),
+    mergeKey: isDelta ? `${args.agent ?? tool ?? 'model'}:delta` : null
   };
 }
 
@@ -254,6 +273,7 @@ function renderInspectPanel() {
 
   panel.classList.toggle('collapsed', state.inspectCollapsed);
   const latest = state.inspectEvents.at(-1);
+  const latestText = inspectCollapsedText(latest);
   panel.innerHTML = `
     <div class="inspect-head">
       <span><strong>Live Inspect</strong><small>${escapeHtml(latest?.label ?? 'waiting')} · ${escapeHtml(latest?.status ?? 'active')}</small></span>
@@ -262,7 +282,9 @@ function renderInspectPanel() {
         <button id="closeInspect" type="button">Close</button>
       </div>
     </div>
-    ${state.inspectCollapsed ? '' : `<div class="inspect-log">${state.inspectEvents.map(renderInspectLogItem).join('')}</div>`}
+    ${state.inspectCollapsed
+      ? `<div class="inspect-mini"><span class="inspect-mini-dot"></span><span class="inspect-mini-text" data-tick="${escapeHtml(String(latest?.tick ?? '0'))}">${escapeHtml(latestText)}</span></div>`
+      : `<div class="inspect-log">${state.inspectEvents.map(renderInspectLogItem).join('')}</div>`}
   `;
   $('toggleInspect')?.addEventListener('click', () => {
     state.inspectCollapsed = !state.inspectCollapsed;
@@ -272,7 +294,17 @@ function renderInspectPanel() {
     state.inspectDismissed = true;
     renderInspectPanel();
   });
-  $('messages').scrollTop = $('messages').scrollHeight;
+  const log = panel.querySelector('.inspect-log');
+  if (log) log.scrollTop = log.scrollHeight;
+  requestAnimationFrame(() => {
+    $('messages').scrollTop = $('messages').scrollHeight;
+  });
+}
+
+function inspectCollapsedText(item) {
+  if (!item) return 'Waiting for activity...';
+  const pieces = [item.target, item.content].filter(Boolean).join(' · ');
+  return truncateEnd(pieces || `${item.label} ${item.status}`, 180);
 }
 
 function renderInspectLogItem(item) {
@@ -354,6 +386,11 @@ function truncateMiddle(value, maxLength = 220) {
   const head = Math.ceil((maxLength - 1) * 0.68);
   const tail = Math.floor((maxLength - 1) * 0.32);
   return `${text.slice(0, head)}…${text.slice(-tail)}`;
+}
+
+function truncateEnd(value, maxLength = 220) {
+  const text = String(value ?? '').replace(/\s+/g, ' ').trim();
+  return text.length <= maxLength ? text : `${text.slice(0, maxLength - 1)}…`;
 }
 
 function renderCitations(citations) {
@@ -1317,8 +1354,10 @@ async function streamChat(path, options) {
 
         if (event.type === 'progress' && event.content) {
           appendInspectEvent(event);
-          progressHistory = [...progressHistory, formatProgressEvent(event)].slice(-6);
-          setInlineProgress(progressHistory);
+          if (event.payload?.runtimeEvent?.kind !== 'model_delta') {
+            progressHistory = [...progressHistory, formatProgressEvent(event)].slice(-6);
+            setInlineProgress(progressHistory);
+          }
           if (event.payload?.graph) {
             state.taskGraph = event.payload.graph;
           }
@@ -1382,6 +1421,7 @@ function formatProgressEvent(event) {
 
 function progressLabel(kind, tool) {
   if (tool) return friendlyToolName(tool.split('/').at(-1));
+  if (kind === 'model_delta') return 'researcher draft';
   if (kind === 'model_started') return 'model';
   return kind.replaceAll('_', ' ');
 }
@@ -1389,6 +1429,7 @@ function progressLabel(kind, tool) {
 function progressStatus(kind) {
   if (kind === 'tool_completed') return 'complete';
   if (kind === 'tool_failed') return 'failed';
+  if (kind === 'model_delta') return 'running';
   if (kind === 'tool_started' || kind === 'tool_progress') return 'running';
   return 'active';
 }

@@ -21,7 +21,7 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             throw new InvalidOperationException("Web browsing is disabled.");
         }
 
-        if (!Uri.TryCreate(arguments.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https"))
+        if (!Uri.TryCreate(arguments.Url, UriKind.Absolute, out var uri) || uri.Scheme is not ("http" or "https") || !HasValidPublicSuffix(uri.Host))
         {
             throw new ArgumentException("Tool argument 'url' must be an absolute HTTP or HTTPS URL.");
         }
@@ -101,6 +101,12 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
 
     private static bool ContainsAny(string value, params string[] candidates) =>
         candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
+
+    private static bool HasValidPublicSuffix(string host)
+    {
+        var suffix = host.Split('.', StringSplitOptions.RemoveEmptyEntries).LastOrDefault();
+        return suffix is { Length: >= 2 } && suffix.Any(char.IsLetter);
+    }
 
     private static string GuidanceFor(Uri uri, string content)
     {

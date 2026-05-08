@@ -166,8 +166,8 @@ public sealed class AssistantOrchestrator(
                     DelegationDepth: 0,
                     OnEvent: onEvent), cancellationToken);
 
-                var graph = await taskGraphs.GetBySessionAsync(session.Id, cancellationToken);
                 var reasoningSteps = agentResponse.ReasoningSteps ?? [];
+                var graph = await taskGraphs.RecordRunCompletedAsync(session.Id, agentResponse.Response, reasoningSteps, cancellationToken);
                 var nextMessages = messages.Concat([new LocalChatMessage("assistant", agentResponse.Response, Guid.NewGuid().ToString("n"), reasoningSteps, graph is null ? null : taskGraphs.SnapshotCurrentTurn(graph), agentResponse.ToolTraces, agentResponse.Citations)]).ToList();
                 await sessions.SaveAsync(session with
                 {
