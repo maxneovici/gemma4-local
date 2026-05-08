@@ -1,4 +1,4 @@
-const cacheName = 'lllmax-shell-v8';
+const cacheName = 'lllmax-shell-v9';
 const shell = ['/', '/styles.css', '/app.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', event => {

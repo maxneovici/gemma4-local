@@ -85,7 +85,7 @@
       <button id="newSession" class="primary">New session</button>
       <details class="panel-section">
         <summary>Memory Sync</summary>
-        <p class="panel-help">Runs quietly every 2 user turns. Use the button only when you want to immediately extract durable facts from this session.</p>
+        <p class="panel-help">Session sync runs quietly every 2 user turns. Canonical profile reflection runs quietly every 8 turns when no recent reflection is active. Use the button only to immediately extract durable facts from this session.</p>
         <button id="consolidateSession" type="button">Run memory sync now</button>
         <div id="consolidationJobs" class="job-list"></div>
       </details>
@@ -175,7 +175,7 @@
           <section id="operationsMemoryPanel" class="operations-panel" hidden>
             <h3>Memory Actions</h3>
             <div id="memoryStats" class="memory-stats"></div>
-            <p class="panel-help">Session memory sync runs automatically and quietly every 2 user turns. Reflection rebuilds the canonical profile from stored memories.</p>
+            <p class="panel-help">Session sync captures user-authored durable facts every 2 turns. Canonical reflection rebuilds the profile from stored memories on a slower 8-turn cadence, or manually here.</p>
             <button id="reflectMemory" type="button">Reflect canonical profile</button>
             <select id="memoryCollectionSelect" hidden></select>
             <details class="memory-add">

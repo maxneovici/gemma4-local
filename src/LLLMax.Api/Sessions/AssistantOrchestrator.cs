@@ -24,6 +24,9 @@ public sealed class AssistantOrchestrator(
     IFoundationUserProfileStore foundationProfile,
     IOptions<LocalAiOptions> options) : IAssistantOrchestrator
 {
+    private const int MemorySyncTurnInterval = 2;
+    private const int MemoryReflectionTurnInterval = 8;
+    private static readonly TimeSpan MemoryReflectionMinimumAge = TimeSpan.FromMinutes(30);
     private readonly LocalAiOptions _options = options.Value;
 
     public async Task<SessionChatResponse> ChatAsync(string sessionId, SessionChatRequest request, CancellationToken cancellationToken)
@@ -434,7 +437,7 @@ public sealed class AssistantOrchestrator(
 
         var completedTurns = messages.Count(message => message.Role.Equals("user", StringComparison.OrdinalIgnoreCase));
 
-        if (completedTurns < 2 || completedTurns % 2 != 0)
+        if (completedTurns < MemorySyncTurnInterval || completedTurns % MemorySyncTurnInterval != 0)
         {
             return;
         }
@@ -445,6 +448,37 @@ public sealed class AssistantOrchestrator(
             Payload: payload,
             Title: "Sync session memory",
             SessionId: sessionId,
+            Agent: _options.Orchestration.DefaultAgent,
+            NotifySession: false), cancellationToken);
+
+        await ScheduleMemoryReflectionAsync(completedTurns, cancellationToken);
+    }
+
+    private async Task ScheduleMemoryReflectionAsync(int completedTurns, CancellationToken cancellationToken)
+    {
+        if (completedTurns < MemoryReflectionTurnInterval || completedTurns % MemoryReflectionTurnInterval != 0)
+        {
+            return;
+        }
+
+        var jobs = await backgroundJobs.ListAsync(cancellationToken);
+        var latestReflection = jobs
+            .Where(job => job.Kind.Equals(BackgroundJobKinds.MemoryReflection, StringComparison.OrdinalIgnoreCase))
+            .OrderByDescending(job => job.UpdatedAt)
+            .FirstOrDefault();
+
+        if (latestReflection is not null
+            && (latestReflection.Status is BackgroundJobStatuses.Queued or BackgroundJobStatuses.Running
+                || DateTimeOffset.UtcNow - latestReflection.UpdatedAt < MemoryReflectionMinimumAge))
+        {
+            return;
+        }
+
+        var payload = JsonSerializer.SerializeToElement(new Memory.MemoryReflectionRequest(Limit: 120));
+        await backgroundJobs.EnqueueAsync(new BackgroundJobCreateRequest(
+            Kind: BackgroundJobKinds.MemoryReflection,
+            Payload: payload,
+            Title: "Reflect canonical profile memory",
             Agent: _options.Orchestration.DefaultAgent,
             NotifySession: false), cancellationToken);
     }
