@@ -911,6 +911,8 @@ Browsed source bundle:
             MetadataValue(metadata, MemoryMetadata.TypeKey) is { } memoryType ? $"type={memoryType}" : null,
             MetadataValue(metadata, MemoryMetadata.ProvenanceKey) is { } provenance ? $"provenance={provenance}" : null,
             MetadataValue(metadata, MemoryMetadata.ConfidenceKey) is { } confidence ? $"confidence={confidence}" : null,
+            MetadataValue(metadata, MemoryMetadata.StateKey) is { } memoryState ? $"state={memoryState}" : null,
+            MetadataValue(metadata, MemoryMetadata.SupersedesKey) is { } supersedes ? $"supersedes={supersedes}" : null,
             MetadataValue(metadata, "recallExpansion") is { } recallExpansion ? $"expandedBy={recallExpansion}" : null,
             MetadataValue(metadata, "category") is { } category ? $"category={category}" : null,
             MetadataValue(metadata, "topic") is { } topic ? $"topic={topic}" : null,
@@ -1056,6 +1058,7 @@ Browsed source bundle:
                     var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
                     metadata.TryAdd("collection", MemoryLayers.Memory);
                     metadata.TryAdd("recallExpansion", "graph_adjacency");
+                    metadata.TryAdd("recallSeed", seed.Result.Id);
                     bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Result.Score, 0.48), metadata), seed.Priority + 4, seed.QueryIndex));
                 }
             }

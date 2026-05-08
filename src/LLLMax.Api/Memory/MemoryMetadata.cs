@@ -16,6 +16,16 @@ public static class MemoryMetadata
     public const string SourceRecordIdKey = "sourceRecordId";
     public const string SupersedesKey = "supersedes";
     public const string SupersededByKey = "supersededBy";
+    public const string StateKey = "memoryState";
+    public const string ActiveState = "active";
+    public const string InactiveState = "inactive";
+    public const string SupersededState = "superseded";
+    public const string ForgottenState = "forgotten";
+    public const string ValidFromKey = "validFrom";
+    public const string ValidUntilKey = "validUntil";
+    public const string ReinforcedAtKey = "reinforcedAt";
+    public const string ReinforcementCountKey = "reinforcementCount";
+    public const string WhyKey = "why";
 
     public static Dictionary<string, string> Build(
         IReadOnlyDictionary<string, string>? metadata,
@@ -36,6 +46,8 @@ public static class MemoryMetadata
         result[ConfidenceKey] = confidence.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture);
         result[MergeKey] = BuildMergeKey(result, text, type);
         result[ReviewStatusKey] = reviewRequired ? "pending" : result.GetValueOrDefault(ReviewStatusKey) ?? "accepted";
+        result.TryAdd(StateKey, ActiveState);
+        result.TryAdd(ValidFromKey, DateTimeOffset.UtcNow.ToString("O"));
 
         if (!string.IsNullOrWhiteSpace(conversationId))
         {
@@ -55,6 +67,17 @@ public static class MemoryMetadata
 
         result.TryAdd("observedAt", DateTimeOffset.UtcNow.ToString("O"));
         return result;
+    }
+
+    public static string GetState(IReadOnlyDictionary<string, string> metadata) =>
+        metadata.TryGetValue(StateKey, out var state) && !string.IsNullOrWhiteSpace(state)
+            ? state.Trim().ToLowerInvariant()
+            : ActiveState;
+
+    public static bool IsSuppressedForRecall(IReadOnlyDictionary<string, string> metadata)
+    {
+        var state = GetState(metadata);
+        return state is InactiveState or SupersededState or ForgottenState;
     }
 
     public static string NormalizeType(string value)

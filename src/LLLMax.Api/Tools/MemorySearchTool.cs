@@ -173,6 +173,7 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore, IMemoryRecal
                     var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
                     metadata.TryAdd("collection", MemoryLayers.Memory);
                     metadata.TryAdd("recallExpansion", "graph_adjacency");
+                    metadata.TryAdd("recallSeed", seed.Result.Id);
                     bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Result.Score, 0.48), metadata), seed.Priority + 4, seed.QueryIndex));
                 }
             }

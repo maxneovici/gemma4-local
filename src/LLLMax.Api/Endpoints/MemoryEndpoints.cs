@@ -36,7 +36,7 @@ public static class MemoryEndpoints
                     ? await SearchDefaultMemoryBandsAsync(normalizedRequest, memoryStore, recallPlanner, cancellationToken)
                     : await memoryStore.SearchAsync(normalizedRequest, cancellationToken);
 
-                return Results.Ok(results.Where(result => !MemoryRecallPolicy.IsNoiseResult(result)).ToList());
+                return Results.Ok(results.Where(result => !MemoryRecallPolicy.IsNoiseResult(result) && !MemoryMetadata.IsSuppressedForRecall(result.Metadata)).ToList());
             }
             catch (InvalidOperationException exception)
             {
@@ -58,6 +58,18 @@ public static class MemoryEndpoints
             try
             {
                 return Results.Ok(await BuildMemoryGraphAsync(request, memoryStore, cancellationToken));
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.Problem(exception.Message);
+            }
+        });
+
+        group.MapPost("/graph/inspect", async (MemoryGraphNodeInspectRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                return Results.Ok(await InspectMemoryGraphNodeAsync(request, memoryStore, cancellationToken));
             }
             catch (InvalidOperationException exception)
             {
@@ -97,6 +109,56 @@ public static class MemoryEndpoints
             {
                 return Results.Problem(exception.Message);
             }
+        });
+
+        group.MapPost("/collections/{collection}/records/{id}/edit", async (string collection, string id, MemoryRecordEditRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var response = await SupersedeRecordAsync(collection, id, request.Text, request.Metadata, request.Why ?? "edited", "edited", memoryStore, cancellationToken);
+                return response is null ? Results.NotFound() : Results.Ok(response);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.Problem(exception.Message);
+            }
+        });
+
+        group.MapPost("/collections/{collection}/records/{id}/supersede", async (string collection, string id, MemoryRecordSupersedeRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            try
+            {
+                var response = await SupersedeRecordAsync(collection, id, request.Text, request.Metadata, request.Why ?? "superseded", "superseded", memoryStore, cancellationToken);
+                return response is null ? Results.NotFound() : Results.Ok(response);
+            }
+            catch (InvalidOperationException exception)
+            {
+                return Results.Problem(exception.Message);
+            }
+        });
+
+        group.MapPost("/collections/{collection}/records/{id}/forget", async (string collection, string id, MemoryRecordForgetRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            var existing = await memoryStore.GetRecordAsync(collection, id, cancellationToken);
+
+            if (existing is null)
+            {
+                return Results.NotFound();
+            }
+
+            var now = DateTimeOffset.UtcNow.ToString("O");
+            var metadata = existing.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+            metadata[MemoryMetadata.StateKey] = MemoryMetadata.ForgottenState;
+            metadata[MemoryMetadata.ValidUntilKey] = now;
+            metadata[MemoryMetadata.WhyKey] = string.IsNullOrWhiteSpace(request.Why) ? "forgotten by review" : request.Why.Trim();
+            var updated = await memoryStore.UpdateRecordAsync(collection, id, new MemoryRecordUpdateRequest(existing.Text, metadata), cancellationToken);
+            return updated is null ? Results.NotFound() : Results.Ok(new MemoryRecordTransitionResponse(updated, Action: "forgotten"));
+        });
+
+        group.MapGet("/collections/{collection}/records/{id}/why", async (string collection, string id, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
+        {
+            var record = await memoryStore.GetRecordAsync(collection, id, cancellationToken);
+            return record is null ? Results.NotFound() : Results.Ok(BuildWhyResponse(record));
         });
 
         group.MapDelete("/collections/{collection}/records/{id}", async (string collection, string id, ILocalMemoryStore memoryStore, CancellationToken cancellationToken) =>
@@ -255,6 +317,11 @@ public static class MemoryEndpoints
             selectedRecords = FocusGraphRecords(selectedRecords, request.FocusId).ToList();
         }
 
+        selectedRecords = selectedRecords
+            .OrderBy(record => MemoryMetadata.GetState(record.Metadata).Equals(MemoryMetadata.ForgottenState, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ThenBy(record => MemoryMetadata.GetState(record.Metadata).Equals(MemoryMetadata.SupersededState, StringComparison.OrdinalIgnoreCase) ? 1 : 0)
+            .ToList();
+
         var nodes = new List<MemoryGraphNode>();
         var edges = new List<MemoryGraphEdge>();
         var conceptWeights = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
@@ -337,6 +404,199 @@ public static class MemoryEndpoints
         return new MemoryGraphResponse(layer, request.Query, selectedRecords.Count, nodes, edges.DistinctBy(edge => $"{edge.Source}|{edge.Target}|{edge.Kind}").ToList());
     }
 
+    private static async Task<MemoryGraphNodeInspectResponse> InspectMemoryGraphNodeAsync(MemoryGraphNodeInspectRequest request, ILocalMemoryStore memoryStore, CancellationToken cancellationToken)
+    {
+        var layer = NormalizeGraphLayer(request.Layer);
+        var limit = Math.Clamp(request.Limit, 6, 48);
+        var records = await LoadGraphRecordsAsync(memoryStore, layer, request.Query, Math.Max(limit * 4, 96), request.Filter, cancellationToken);
+        var allowedTypes = (request.Types ?? [])
+            .Where(type => !string.IsNullOrWhiteSpace(type))
+            .Select(MemoryMetadata.NormalizeType)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var candidates = records
+            .Where(record => !MemoryRecallPolicy.IsNoiseResult(new MemorySearchResult(record.Id, record.TextPreview, 1, record.Metadata)))
+            .Where(record => allowedTypes.Count == 0 || allowedTypes.Contains(GetMemoryType(record.Metadata)))
+            .ToList();
+
+        MemoryCollectionRecordPreview? focusRecord = null;
+        var focusId = request.RecordId;
+
+        if (string.IsNullOrWhiteSpace(focusId) && request.NodeId?.StartsWith("record:", StringComparison.OrdinalIgnoreCase) == true)
+        {
+            focusId = request.NodeId["record:".Length..];
+        }
+
+        if (!string.IsNullOrWhiteSpace(focusId))
+        {
+            focusRecord = candidates.FirstOrDefault(record => record.Id.Equals(focusId, StringComparison.OrdinalIgnoreCase))
+                ?? ToPreview(await memoryStore.GetRecordAsync(layer, focusId, cancellationToken));
+
+            if (focusRecord is not null && candidates.All(record => !record.Id.Equals(focusRecord.Id, StringComparison.OrdinalIgnoreCase)))
+            {
+                candidates.Add(focusRecord);
+            }
+        }
+
+        var focusConcepts = focusRecord is not null
+            ? ExtractGraphConcepts(focusRecord, layer).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>([request.Label ?? string.Empty], StringComparer.OrdinalIgnoreCase);
+        focusConcepts.RemoveWhere(string.IsNullOrWhiteSpace);
+
+        if (focusConcepts.Count == 0 && !string.IsNullOrWhiteSpace(request.NodeId))
+        {
+            focusConcepts.Add(GraphConceptLabel(request.NodeId.Replace("concept:", string.Empty, StringComparison.OrdinalIgnoreCase)));
+        }
+
+        var related = candidates
+            .Select(record => new
+            {
+                Record = record,
+                Concepts = ExtractGraphConcepts(record, layer).ToList()
+            })
+            .Select(item => new
+            {
+                item.Record,
+                item.Concepts,
+                Matched = item.Concepts.Where(concept => focusConcepts.Contains(concept)).Distinct(StringComparer.OrdinalIgnoreCase).ToList(),
+                Score = focusRecord is not null && item.Record.Id.Equals(focusRecord.Id, StringComparison.OrdinalIgnoreCase) ? 100 : item.Concepts.Count(focusConcepts.Contains)
+            })
+            .Where(item => item.Score > 0 || focusConcepts.Count == 0)
+            .OrderByDescending(item => item.Score)
+            .ThenByDescending(item => DateTimeOffset.TryParse(GetMetadata(item.Record.Metadata, "observedAt"), out var observedAt) ? observedAt : DateTimeOffset.MinValue)
+            .Take(limit)
+            .Select(item => new MemoryGraphRelatedRecord(
+                item.Record.Id,
+                layer,
+                item.Record.TextPreview,
+                GetMemoryType(item.Record.Metadata),
+                GetMetadata(item.Record.Metadata, MemoryMetadata.ProvenanceKey),
+                GetMetadata(item.Record.Metadata, "observedAt"),
+                MemoryMetadata.GetState(item.Record.Metadata),
+                item.Record.Metadata,
+                item.Matched.Count > 0 ? item.Matched : item.Concepts.Take(4).ToList()))
+            .ToList();
+
+        return new MemoryGraphNodeInspectResponse(
+            layer,
+            request.NodeId,
+            request.Label,
+            focusRecord?.Id ?? request.RecordId,
+            related,
+            focusConcepts.ToList());
+    }
+
+    private static MemoryCollectionRecordPreview? ToPreview(MemoryRecordDetail? detail) =>
+        detail is null ? null : new MemoryCollectionRecordPreview(detail.Id, detail.Text, detail.TextLength, detail.Metadata);
+
+    private static async Task<MemoryRecordTransitionResponse?> SupersedeRecordAsync(
+        string collection,
+        string id,
+        string text,
+        IReadOnlyDictionary<string, string>? replacementMetadata,
+        string why,
+        string action,
+        ILocalMemoryStore memoryStore,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new InvalidOperationException("Memory text is required.");
+        }
+
+        var existing = await memoryStore.GetRecordAsync(collection, id, cancellationToken);
+
+        if (existing is null)
+        {
+            return null;
+        }
+
+        var now = DateTimeOffset.UtcNow.ToString("O");
+        var oldMetadata = existing.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+        oldMetadata[MemoryMetadata.StateKey] = MemoryMetadata.SupersededState;
+        oldMetadata[MemoryMetadata.ValidUntilKey] = now;
+        oldMetadata[MemoryMetadata.WhyKey] = why.Trim();
+
+        var newMetadata = existing.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
+
+        foreach (var pair in replacementMetadata ?? new Dictionary<string, string>())
+        {
+            if (!string.IsNullOrWhiteSpace(pair.Key) && !string.IsNullOrWhiteSpace(pair.Value))
+            {
+                newMetadata[pair.Key] = pair.Value;
+            }
+        }
+
+        newMetadata[MemoryMetadata.StateKey] = MemoryMetadata.ActiveState;
+        newMetadata[MemoryMetadata.ValidFromKey] = now;
+        newMetadata.Remove(MemoryMetadata.ValidUntilKey);
+        newMetadata[MemoryMetadata.SupersedesKey] = id;
+        newMetadata[MemoryMetadata.WhyKey] = why.Trim();
+        newMetadata[MemoryMetadata.MergeKey] = oldMetadata.GetValueOrDefault(MemoryMetadata.MergeKey) ?? MemoryMetadata.BuildMergeKey(newMetadata, text, GetMemoryType(newMetadata));
+
+        var replacement = await memoryStore.UpsertAsync(new MemoryUpsertRequest(collection, text.Trim(), newMetadata), cancellationToken);
+        oldMetadata[MemoryMetadata.SupersededByKey] = replacement.Id;
+        var updatedOriginal = await memoryStore.UpdateRecordAsync(collection, id, new MemoryRecordUpdateRequest(existing.Text, oldMetadata), cancellationToken);
+        var replacementRecord = await memoryStore.GetRecordAsync(collection, replacement.Id, cancellationToken);
+
+        return updatedOriginal is null || replacementRecord is null
+            ? null
+            : new MemoryRecordTransitionResponse(updatedOriginal, replacementRecord, action);
+    }
+
+    private static MemoryRecordWhyResponse BuildWhyResponse(MemoryRecordDetail record)
+    {
+        var metadata = record.Metadata;
+        var explanation = new List<string>();
+        var state = MemoryMetadata.GetState(metadata);
+        explanation.Add(state.Equals(MemoryMetadata.ActiveState, StringComparison.OrdinalIgnoreCase)
+            ? "This record is active and eligible for recall."
+            : $"This record is historical and marked {state}; final recall suppresses it unless used for graph/timeline context.");
+
+        if (GetMetadata(metadata, MemoryMetadata.ProvenanceKey) is { } provenance)
+        {
+            explanation.Add($"It came from {provenance}.");
+        }
+
+        if (GetMetadata(metadata, MemoryMetadata.SourceConversationKey) is { } conversationId)
+        {
+            explanation.Add($"It is linked to source conversation {conversationId}.");
+        }
+
+        if (GetMetadata(metadata, MemoryMetadata.SupersedesKey) is { } supersedes)
+        {
+            explanation.Add($"It supersedes earlier record {supersedes}.");
+        }
+
+        if (GetMetadata(metadata, MemoryMetadata.SupersededByKey) is { } supersededBy)
+        {
+            explanation.Add($"It was superseded by record {supersededBy}.");
+        }
+
+        if (GetMetadata(metadata, "recallExpansion") is { } expansion)
+        {
+            explanation.Add($"It was discovered through {expansion} during graph-adjacent recall.");
+        }
+
+        return new MemoryRecordWhyResponse(
+            record.Id,
+            record.Collection,
+            record.Text,
+            state,
+            GetMemoryType(metadata),
+            GetMetadata(metadata, MemoryMetadata.ProvenanceKey),
+            GetMetadata(metadata, "observedAt"),
+            GetMetadata(metadata, MemoryMetadata.ValidFromKey),
+            GetMetadata(metadata, MemoryMetadata.ValidUntilKey),
+            GetMetadata(metadata, MemoryMetadata.SourceConversationKey),
+            GetMetadata(metadata, MemoryMetadata.SourceMessageRoleKey),
+            GetMetadata(metadata, MemoryMetadata.SourceRecordIdKey),
+            GetMetadata(metadata, MemoryMetadata.SupersedesKey),
+            GetMetadata(metadata, MemoryMetadata.SupersededByKey),
+            GetMetadata(metadata, MemoryMetadata.WhyKey),
+            metadata,
+            explanation);
+    }
+
     private static async Task<MemoryReviewResponse> BuildMemoryReviewAsync(ILocalMemoryStore memoryStore, CancellationToken cancellationToken)
     {
         var collections = new[] { MemoryLayers.Memory, MemoryLayers.Knowledge };
@@ -377,6 +637,7 @@ public static class MemoryEndpoints
             GetMetadata(record.Metadata, MemoryMetadata.ProvenanceKey),
             GetMetadata(record.Metadata, MemoryMetadata.ConfidenceKey),
             GetMetadata(record.Metadata, "observedAt"),
+            MemoryMetadata.GetState(record.Metadata),
             record.Metadata);
 
     private static async Task<IReadOnlyList<MemoryCollectionRecordPreview>> LoadGraphRecordsAsync(ILocalMemoryStore memoryStore, string layer, string? query, int limit, IReadOnlyDictionary<string, string>? filter, CancellationToken cancellationToken)
@@ -601,6 +862,7 @@ public static class MemoryEndpoints
                     var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
                     metadata.TryAdd("collection", MemoryLayers.Memory);
                     metadata.TryAdd("recallExpansion", "graph_adjacency");
+                    metadata.TryAdd("recallSeed", seed.Result.Id);
                     bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Min(seed.Result.Score, 0.48), metadata), seed.Priority + 4, seed.QueryIndex));
                 }
             }

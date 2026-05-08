@@ -109,6 +109,7 @@ builder.Services.AddSingleton<ILocalTool, AgentDelegationTool>();
 builder.Services.AddSingleton<ILocalTool, MemorySearchTool>();
 builder.Services.AddSingleton<ILocalTool, KnowledgeSearchTool>();
 builder.Services.AddSingleton<ILocalTool, MemoryWriteTool>();
+builder.Services.AddSingleton<ILocalTool, MemoryCorrectTool>();
 builder.Services.AddSingleton<ILocalTool, WebBrowseTool>();
 builder.Services.AddSingleton<ILocalTool, DeepResearchWebTool>();
 builder.Services.AddSingleton<ILocalTool, DeepResearchTool>();

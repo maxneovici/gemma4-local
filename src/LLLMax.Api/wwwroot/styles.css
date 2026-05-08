@@ -237,12 +237,15 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .graph-type-filters button { width: auto; padding: 0.34rem 0.52rem; border-radius: 999px; color: var(--muted); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.07em; }
 .graph-type-filters button.active { border-color: rgba(20, 184, 166, 0.5); color: var(--accent-2); background: rgba(20, 184, 166, 0.1); }
 .memory-graph-canvas { position: relative; min-height: 470px; border: 1px solid rgba(56, 189, 248, 0.12); border-radius: 20px; overflow: hidden; background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.08), transparent 18rem), rgba(2, 6, 11, 0.7); }
-.memory-graph-svg { width: 100%; height: 100%; min-height: 470px; display: block; }
+.memory-graph-svg { width: 100%; height: 100%; min-height: 470px; display: block; touch-action: none; cursor: grab; }
+.memory-graph-svg.panning { cursor: grabbing; }
+.graph-viewport { pointer-events: all; }
 .graph-orbit { fill: none; stroke: rgba(56, 189, 248, 0.13); stroke-width: 1; stroke-dasharray: 8 12; animation: graphSpin 28s linear infinite; transform-origin: 300px 300px; }
 .graph-orbit.inner { stroke: rgba(20, 184, 166, 0.16); animation-duration: 18s; animation-direction: reverse; }
 .graph-edge { stroke: rgba(56, 189, 248, 0.26); stroke-linecap: round; }
 .graph-edge.co-occurs { stroke: rgba(20, 184, 166, 0.2); stroke-dasharray: 4 8; }
-.graph-node { cursor: pointer; transition: opacity 0.18s ease, transform 0.18s ease; }
+.graph-node { cursor: pointer; pointer-events: all; transition: opacity 0.18s ease, transform 0.18s ease; }
+.graph-node-hit { fill: transparent; stroke: transparent; pointer-events: all; }
 .graph-node circle { stroke: rgba(226, 246, 255, 0.7); stroke-width: 1; fill: rgba(56, 189, 248, 0.22); }
 .graph-node.concept circle { fill: rgba(56, 189, 248, 0.22); stroke: rgba(125, 211, 252, 0.88); }
 .graph-node.record circle { fill: rgba(20, 184, 166, 0.68); stroke: rgba(153, 246, 228, 0.82); }
@@ -255,6 +258,14 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .memory-graph-inspector strong { display: block; color: var(--accent); font-size: 0.86rem; line-height: 1.25; }
 .memory-graph-inspector p { color: #d8d8d8; font-size: 0.72rem; line-height: 1.42; }
 .memory-graph-inspector button { margin-top: 0.6rem; width: 100%; }
+.source-explanation { display: grid; gap: 0.28rem; margin: 0.55rem 0; padding: 0.55rem; border: 1px solid rgba(20, 184, 166, 0.16); border-radius: 12px; background: rgba(20, 184, 166, 0.05); }
+.source-explanation strong { color: var(--accent-2); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.source-explanation span { color: #d8d8d8; font-size: 0.68rem; line-height: 1.35; }
+.graph-related-records { display: grid; gap: 0.5rem; margin-top: 0.75rem; max-height: 285px; overflow: auto; }
+.graph-related-records > strong { color: var(--accent-2); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.08em; }
+.graph-related-record { padding: 0.55rem; border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 12px; background: rgba(8, 8, 9, 0.42); }
+.graph-related-record p { margin: 0.35rem 0; font-size: 0.68rem; }
+.graph-related-record button { margin-top: 0.4rem; padding: 0.36rem 0.48rem; font-size: 0.62rem; }
 .graph-badges { display: flex; gap: 0.3rem; flex-wrap: wrap; margin-top: 0.45rem; }
 .graph-badges span { padding: 0.15rem 0.38rem; border: 1px solid rgba(56, 189, 248, 0.17); border-radius: 999px; color: var(--accent-2); font-size: 0.61rem; }
 .memory-review-inbox { grid-column: 1 / -1; display: grid; gap: 0.45rem; padding: 0.75rem; border: 1px solid rgba(251, 191, 36, 0.18); border-radius: 16px; background: rgba(10, 8, 3, 0.42); }

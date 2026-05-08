@@ -18,6 +18,7 @@ public sealed class KnowledgeSearchTool(ILocalMemoryStore memoryStore) : LocalTo
             Query: arguments.Query,
             Limit: Math.Clamp(arguments.Limit ?? 8, 1, 24),
             Filter: filter), cancellationToken);
+        results = results.Where(result => !MemoryMetadata.IsSuppressedForRecall(result.Metadata)).ToList();
 
         if (results.Count == 0)
         {

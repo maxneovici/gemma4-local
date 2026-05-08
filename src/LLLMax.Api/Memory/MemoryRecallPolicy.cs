@@ -57,6 +57,12 @@ public static class MemoryRecallPolicy
     {
         var ranked = items
             .Where(item => !IsNoiseResult(item.Result))
+            .Where(item => !MemoryMetadata.IsSuppressedForRecall(item.Result.Metadata))
+            .GroupBy(item => item.Result.Metadata.TryGetValue(MemoryMetadata.MergeKey, out var mergeKey) && !string.IsNullOrWhiteSpace(mergeKey) ? mergeKey : item.Result.Id, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group
+                .OrderByDescending(item => ActiveRecordRank(item.Result))
+                .ThenByDescending(item => Rank(item.Result, item.Priority, queries.ElementAtOrDefault(item.QueryIndex) ?? string.Empty, plan))
+                .First())
             .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group
                 .OrderByDescending(item => Rank(item.Result, item.Priority, queries.ElementAtOrDefault(item.QueryIndex) ?? string.Empty, plan))
@@ -247,6 +253,19 @@ public static class MemoryRecallPolicy
 
     private static string? MetadataValue(MemorySearchResult result, string key) =>
         result.Metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;
+
+    private static double ActiveRecordRank(MemorySearchResult result) =>
+        ParseDouble(MetadataValue(result, MemoryMetadata.ConfidenceKey))
+        + ParseDateTicks(MetadataValue(result, MemoryMetadata.ReinforcedAtKey))
+        + ParseDateTicks(MetadataValue(result, "observedAt"))
+        + ParseDateTicks(MetadataValue(result, MemoryMetadata.ValidFromKey))
+        + (ParseDouble(MetadataValue(result, MemoryMetadata.ReinforcementCountKey)) * 0.01);
+
+    private static double ParseDouble(string? value) =>
+        double.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var parsed) ? parsed : 0;
+
+    private static double ParseDateTicks(string? value) =>
+        DateTimeOffset.TryParse(value, out var parsed) ? parsed.ToUnixTimeSeconds() / 1_000_000_000.0 : 0;
 
     private static IEnumerable<string> ExtractSignificantTerms(string value) =>
         Regex.Matches(NormalizeQuery(value).ToLowerInvariant(), @"[\p{L}\p{N}]{3,}")

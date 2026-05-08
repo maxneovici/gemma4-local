@@ -14,6 +14,8 @@ const state = {
   memoryGraphLayer: 'memory',
   memoryGraphQuery: '',
   memoryGraphZoom: 1,
+  memoryGraphPanX: 0,
+  memoryGraphPanY: 0,
   memoryGraphFocusId: null,
   memoryGraphTypes: [],
   memoryReview: null,
@@ -983,7 +985,7 @@ function bindMemoryGraphControls() {
     button.addEventListener('click', () => {
       state.memoryGraphLayer = button.dataset.graphLayer;
       state.memoryGraphFocusId = null;
-      state.memoryGraphZoom = 1;
+      resetMemoryGraphView();
       renderMemoryDashboard(state.memoryStats, state.memoryProfile);
       loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
     });
@@ -1013,7 +1015,7 @@ function bindMemoryGraphControls() {
     });
   });
   $('memoryGraphReset')?.addEventListener('click', () => {
-    state.memoryGraphZoom = 1;
+    resetMemoryGraphView();
     state.memoryGraphFocusId = null;
     state.memoryGraphQuery = '';
     state.memoryGraphTypes = [];
@@ -1025,6 +1027,12 @@ function bindMemoryGraphControls() {
 function setMemoryGraphZoom(value) {
   state.memoryGraphZoom = Math.max(0.62, Math.min(2.6, value));
   renderMemoryGraphCanvas();
+}
+
+function resetMemoryGraphView() {
+  state.memoryGraphZoom = 1;
+  state.memoryGraphPanX = 0;
+  state.memoryGraphPanY = 0;
 }
 
 function renderMemoryGraphCanvas() {
@@ -1039,31 +1047,46 @@ function renderMemoryGraphCanvas() {
   }
 
   const zoom = state.memoryGraphZoom;
+  const panX = state.memoryGraphPanX;
+  const panY = state.memoryGraphPanY;
   const center = 300;
   const project = node => ({
-    x: center + ((node.x - 50) * 5.15 * zoom),
-    y: center + ((node.y - 50) * 5.15 * zoom)
+    x: center + panX + ((node.x - 50) * 5.15 * zoom),
+    y: center + panY + ((node.y - 50) * 5.15 * zoom)
   });
   const nodeById = new Map((graph.nodes ?? []).map(node => [node.id, node]));
   const edges = graph.edges ?? [];
   const nodes = graph.nodes ?? [];
 
   canvas.innerHTML = `
-    <svg class="memory-graph-svg" viewBox="0 0 600 600" role="img" aria-label="${escapeHtml(graph.layer)} vector graph">
+    <svg class="memory-graph-svg" viewBox="0 0 600 600" role="img" aria-label="${escapeHtml(graph.layer)} vector graph" tabindex="0">
       <defs>
         <radialGradient id="graphGlow" cx="50%" cy="50%" r="50%"><stop offset="0%" stop-color="#38bdf8" stop-opacity="0.8"/><stop offset="100%" stop-color="#14b8a6" stop-opacity="0.02"/></radialGradient>
         <filter id="nodeGlow"><feGaussianBlur stdDeviation="3.5" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
       </defs>
       <circle cx="300" cy="300" r="238" class="graph-orbit"></circle>
       <circle cx="300" cy="300" r="145" class="graph-orbit inner"></circle>
-      ${edges.map(edge => renderGraphEdge(edge, nodeById, project)).join('')}
-      ${nodes.map(node => renderGraphNode(node, project)).join('')}
+      <g class="graph-viewport">
+        ${edges.map(edge => renderGraphEdge(edge, nodeById, project)).join('')}
+        ${nodes.map(node => renderGraphNode(node, project)).join('')}
+      </g>
     </svg>
     <div class="graph-readout"><strong>${escapeHtml(graph.layer)}</strong><span>${escapeHtml(graph.recordCount)} records · ${escapeHtml(nodes.filter(node => node.kind === 'concept').length)} clusters · zoom ${Math.round(zoom * 100)}%</span></div>
   `;
   canvas.querySelectorAll('[data-graph-node]').forEach(element => {
-    element.addEventListener('click', () => focusMemoryGraphNode(element.dataset.graphNode));
+    element.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      focusMemoryGraphNode(element.dataset.graphNode);
+    });
+    element.addEventListener('keydown', event => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault();
+        focusMemoryGraphNode(element.dataset.graphNode);
+      }
+    });
   });
+  bindMemoryGraphViewport(canvas);
   renderMemoryGraphInspector(nodes.find(node => node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId) ?? null);
 }
 
@@ -1081,27 +1104,98 @@ function renderGraphNode(node, project) {
   const isConcept = node.kind === 'concept';
   const radius = isConcept ? Math.min(42, 13 + node.weight * 2.6) : 5.5;
   const selected = node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId;
+  const hitRadius = Math.max(radius + 8, isConcept ? 24 : 16);
+  const nodeKey = node.recordId ?? node.id;
   return `
-    <g class="graph-node ${escapeHtml(node.kind)} ${escapeHtml(node.memoryType ?? '')} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(node.recordId ?? node.id)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+    <g class="graph-node ${escapeHtml(node.kind)} ${escapeHtml(node.memoryType ?? '')} ${selected ? 'selected' : ''}" data-graph-node="${escapeHtml(nodeKey)}" tabindex="0" role="button" aria-label="Inspect ${escapeHtml(node.label)}" transform="translate(${point.x.toFixed(1)} ${point.y.toFixed(1)})">
+      <circle class="graph-node-hit" r="${hitRadius.toFixed(1)}"></circle>
       <circle r="${radius.toFixed(1)}" filter="url(#nodeGlow)"></circle>
       ${isConcept ? `<text y="${(radius + 13).toFixed(1)}">${escapeHtml(truncateMiddle(node.label, 22))}</text>` : ''}
     </g>
   `;
 }
 
-function focusMemoryGraphNode(id) {
+async function focusMemoryGraphNode(id) {
   const node = state.memoryGraph?.nodes?.find(item => item.id === id || item.recordId === id);
-  renderMemoryGraphInspector(node ?? null);
-  if (!node?.recordId) {
-    state.memoryGraphFocusId = node?.id ?? null;
+  state.memoryGraphFocusId = node?.recordId ?? node?.id ?? id;
+  renderMemoryGraphCanvas();
+
+  if (!node) {
+    renderMemoryGraphInspector(null);
     return;
   }
 
-  state.memoryGraphFocusId = node.recordId;
-  loadMemoryGraph().catch(error => setStatus(error.message, 'error'));
+  await inspectMemoryGraphNode(node);
 }
 
-function renderMemoryGraphInspector(node) {
+async function inspectMemoryGraphNode(node) {
+  const inspector = $('memoryGraphInspector');
+  if (inspector) {
+    inspector.innerHTML = `<strong>${escapeHtml(node.label)}</strong><p class="muted">Loading related Qdrant records...</p>`;
+  }
+
+  try {
+    const query = state.memoryGraphQuery.trim();
+    const result = await api('/memory/graph/inspect', {
+      method: 'POST',
+      body: JSON.stringify({
+        layer: state.memoryGraphLayer,
+        query: query || null,
+        limit: 24,
+        nodeId: node.id,
+        recordId: node.recordId ?? null,
+        label: node.label,
+        types: state.memoryGraphTypes
+      })
+    });
+    renderMemoryGraphInspector(node, result);
+  } catch (error) {
+    setStatus(error.message, 'error');
+    renderMemoryGraphInspector(node);
+  }
+}
+
+function bindMemoryGraphViewport(canvas) {
+  const svg = canvas.querySelector('.memory-graph-svg');
+  if (!svg) return;
+
+  svg.addEventListener('wheel', event => {
+    event.preventDefault();
+    setMemoryGraphZoom(state.memoryGraphZoom + (event.deltaY < 0 ? 0.12 : -0.12));
+  }, { passive: false });
+
+  let dragging = false;
+  let startX = 0;
+  let startY = 0;
+  let panX = 0;
+  let panY = 0;
+
+  svg.addEventListener('pointerdown', event => {
+    if (event.target.closest?.('[data-graph-node]')) return;
+    dragging = true;
+    startX = event.clientX;
+    startY = event.clientY;
+    panX = state.memoryGraphPanX;
+    panY = state.memoryGraphPanY;
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add('panning');
+  });
+
+  svg.addEventListener('pointermove', event => {
+    if (!dragging) return;
+    state.memoryGraphPanX = Math.max(-220, Math.min(220, panX + event.clientX - startX));
+    state.memoryGraphPanY = Math.max(-220, Math.min(220, panY + event.clientY - startY));
+    renderMemoryGraphCanvas();
+  });
+
+  svg.addEventListener('pointerup', event => {
+    dragging = false;
+    svg.releasePointerCapture?.(event.pointerId);
+    svg.classList.remove('panning');
+  });
+}
+
+function renderMemoryGraphInspector(node, related = null) {
   const inspector = $('memoryGraphInspector');
   if (!inspector) return;
 
@@ -1111,14 +1205,31 @@ function renderMemoryGraphInspector(node) {
   }
 
   const metadata = Object.entries(node.metadata ?? {}).slice(0, 8).map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`).join('');
+  const relatedRecords = related?.records ?? [];
   inspector.innerHTML = `
     <strong>${escapeHtml(node.label)}</strong>
-    <div class="graph-badges">${node.memoryType ? `<span>${escapeHtml(node.memoryType)}</span>` : ''}${node.provenance ? `<span>${escapeHtml(node.provenance)}</span>` : ''}${node.observedAt ? `<span>${escapeHtml(new Date(node.observedAt).toLocaleString())}</span>` : ''}</div>
+    <div class="graph-badges">${node.memoryType ? `<span>${escapeHtml(node.memoryType)}</span>` : ''}${node.provenance ? `<span>${escapeHtml(node.provenance)}</span>` : ''}${node.metadata?.memoryState ? `<span>${escapeHtml(node.metadata.memoryState)}</span>` : ''}${node.observedAt ? `<span>${escapeHtml(new Date(node.observedAt).toLocaleString())}</span>` : ''}</div>
     <p>${escapeHtml(node.textPreview ?? `${node.weight} linked vector${node.weight === 1 ? '' : 's'}`)}</p>
     <div class="metadata-row">${metadata || `<span>${escapeHtml(node.kind)}</span>`}</div>
     ${node.recordId ? `<button data-open-memory-record="${escapeHtml(node.recordId)}" data-open-memory-layer="${escapeHtml(state.memoryGraphLayer)}" type="button">Open Source Record</button>` : ''}
+    ${related ? `<div class="graph-related-records"><strong>Related Qdrant Records</strong>${relatedRecords.map(renderGraphRelatedRecord).join('') || '<p class="muted">No related records found.</p>'}</div>` : ''}
   `;
   inspector.querySelector('[data-open-memory-record]')?.addEventListener('click', event => openGraphMemoryRecord(event.target.dataset.openMemoryLayer, event.target.dataset.openMemoryRecord));
+  inspector.querySelectorAll('[data-open-related-record]').forEach(button => {
+    button.addEventListener('click', () => openGraphMemoryRecord(button.dataset.relatedCollection, button.dataset.openRelatedRecord));
+  });
+}
+
+function renderGraphRelatedRecord(record) {
+  const concepts = (record.matchedConcepts ?? []).slice(0, 4).map(concept => `<span>${escapeHtml(concept)}</span>`).join('');
+  return `
+    <article class="graph-related-record">
+      <div class="graph-badges"><span>${escapeHtml(record.memoryType ?? 'record')}</span><span>${escapeHtml(record.provenance ?? 'unknown')}</span><span>${escapeHtml(record.memoryState ?? 'active')}</span></div>
+      <p>${escapeHtml(record.text)}</p>
+      <div class="metadata-row">${concepts || '<span>related</span>'}</div>
+      <button data-open-related-record="${escapeHtml(record.id)}" data-related-collection="${escapeHtml(record.collection)}" type="button">Inspect Record</button>
+    </article>
+  `;
 }
 
 function memoryGraphTypes() {
@@ -1128,14 +1239,22 @@ function memoryGraphTypes() {
 async function openGraphMemoryRecord(collection, id) {
   await guarded(async () => {
     const record = await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}`);
+    const why = await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}/why`);
     $('memoryGraphInspector').innerHTML = `
       <strong>Source Record</strong>
-      <div class="graph-badges"><span>${escapeHtml(collection)}</span><span>${escapeHtml(record.metadata?.memoryType ?? 'record')}</span><span>${escapeHtml(record.metadata?.provenance ?? 'unknown provenance')}</span></div>
+      <div class="graph-badges"><span>${escapeHtml(collection)}</span><span>${escapeHtml(record.metadata?.memoryType ?? 'record')}</span><span>${escapeHtml(record.metadata?.provenance ?? 'unknown provenance')}</span><span>${escapeHtml(why.memoryState ?? 'active')}</span></div>
       <p>${escapeHtml(record.text)}</p>
+      <div class="source-explanation"><strong>Why this is known</strong>${(why.explanation ?? []).map(line => `<span>${escapeHtml(line)}</span>`).join('')}</div>
       <div class="metadata-row">${Object.entries(record.metadata ?? {}).map(([key, value]) => `<span>${escapeHtml(key)}=${escapeHtml(value)}</span>`).join('')}</div>
-      ${record.metadata?.sourceConversationId ? `<button id="openSourceSession" type="button">Open Source Session</button>` : ''}
+      <div class="memory-record-actions">
+        ${record.metadata?.sourceConversationId ? `<button id="openSourceSession" type="button">Open Source Session</button>` : ''}
+        <button data-memory-action="edit" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(id)}" type="button">Edit as New</button>
+        <button data-memory-action="supersede" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(id)}" type="button">Supersede</button>
+        <button data-memory-action="forget" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(id)}" type="button">Forget</button>
+      </div>
     `;
     $('openSourceSession')?.addEventListener('click', () => openSession(record.metadata.sourceConversationId));
+    bindMemoryTransitionActions($('memoryGraphInspector'));
   }, 'Opening memory source...', { overlay: false });
 }
 
@@ -1157,10 +1276,50 @@ function renderMemoryReviewInbox() {
     ${pending.slice(0, 3).map(renderReviewItem).join('')}
     ${duplicateGroups.slice(0, 4).map(group => `<details><summary>${escapeHtml(group.memoryType ?? 'duplicate')} · ${escapeHtml(group.records.length)} records</summary>${group.records.slice(0, 4).map(renderReviewItem).join('')}</details>`).join('')}
   `;
+  bindMemoryTransitionActions(container);
 }
 
 function renderReviewItem(item) {
-  return `<article class="review-item"><span>${escapeHtml(item.memoryType ?? 'record')} · ${escapeHtml(item.provenance ?? 'unknown')} · ${escapeHtml(item.confidence ?? '-')}</span><p>${escapeHtml(item.textPreview)}</p></article>`;
+  return `<article class="review-item"><span>${escapeHtml(item.memoryType ?? 'record')} · ${escapeHtml(item.provenance ?? 'unknown')} · ${escapeHtml(item.confidence ?? '-')} · ${escapeHtml(item.memoryState ?? 'active')}</span><p>${escapeHtml(item.textPreview)}</p><div class="memory-record-actions"><button data-memory-action="open" data-memory-collection="${escapeHtml(item.collection)}" data-memory-id="${escapeHtml(item.id)}" type="button">Why</button><button data-memory-action="edit" data-memory-collection="${escapeHtml(item.collection)}" data-memory-id="${escapeHtml(item.id)}" type="button">Edit</button><button data-memory-action="supersede" data-memory-collection="${escapeHtml(item.collection)}" data-memory-id="${escapeHtml(item.id)}" type="button">Supersede</button><button data-memory-action="forget" data-memory-collection="${escapeHtml(item.collection)}" data-memory-id="${escapeHtml(item.id)}" type="button">Forget</button></div></article>`;
+}
+
+function bindMemoryTransitionActions(root = document) {
+  root.querySelectorAll('[data-memory-action]').forEach(button => {
+    button.addEventListener('click', () => runMemoryTransition(button.dataset.memoryCollection, button.dataset.memoryId, button.dataset.memoryAction));
+  });
+}
+
+async function runMemoryTransition(collection, id, action) {
+  if (!collection || !id || !action) return;
+
+  if (action === 'open') {
+    await openGraphMemoryRecord(collection, id);
+    return;
+  }
+
+  await guarded(async () => {
+    if (action === 'forget') {
+      const why = prompt('Why should this memory be forgotten?', 'Incorrect or no longer useful');
+      if (why === null) return;
+      await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}/forget`, {
+        method: 'POST',
+        body: JSON.stringify({ why })
+      });
+    } else {
+      const current = await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}`);
+      const text = prompt(action === 'edit' ? 'Replacement memory text:' : 'Superseding memory text:', current.text ?? '');
+      if (text === null || !text.trim()) return;
+      const why = prompt('Why is this change correct?', action === 'edit' ? 'Corrected by review' : 'Newer information supersedes it');
+      if (why === null) return;
+      await api(`/memory/collections/${encodeURIComponent(collection)}/records/${encodeURIComponent(id)}/${action}`, {
+        method: 'POST',
+        body: JSON.stringify({ text, why })
+      });
+    }
+
+    await Promise.all([loadMemoryGraph({ renderOnlyIfVisible: true }), loadMemoryStats()]);
+    await openGraphMemoryRecord(collection, id);
+  }, 'Updating memory state...', { overlay: false });
 }
 
 const operationPanels = {
@@ -1302,10 +1461,14 @@ function renderMemoryRecordDetail(element, record) {
   element.querySelector('.record-head span').textContent = `${record.textLength} chars`;
   element.querySelector('.metadata-row').innerHTML = renderMetadata(record.metadata ?? {}) || '<span>no metadata</span>';
   element.querySelector('.memory-record-actions').innerHTML = `
+    <button data-memory-action="open" data-memory-collection="${escapeHtml(record.collection)}" data-memory-id="${escapeHtml(record.id)}" type="button">Why</button>
     <button data-edit-memory="${escapeHtml(record.id)}" type="button">Edit</button>
+    <button data-memory-action="supersede" data-memory-collection="${escapeHtml(record.collection)}" data-memory-id="${escapeHtml(record.id)}" type="button">Supersede</button>
+    <button data-memory-action="forget" data-memory-collection="${escapeHtml(record.collection)}" data-memory-id="${escapeHtml(record.id)}" type="button">Forget</button>
     <button data-delete-memory="${escapeHtml(record.id)}" type="button">Delete</button>
   `;
   bindMemoryRecordActions(element);
+  bindMemoryTransitionActions(element);
 }
 
 function renderMemoryRecordEditor(element, record) {
@@ -2042,6 +2205,9 @@ function renderMemorySearchResults(collection, query, results) {
             <div class="memory-record-actions">
               <button data-view-memory="${escapeHtml(result.id)}" type="button">View</button>
               <button data-edit-memory="${escapeHtml(result.id)}" type="button">Edit</button>
+              <button data-memory-action="open" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(result.id)}" type="button">Why</button>
+              <button data-memory-action="supersede" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(result.id)}" type="button">Supersede</button>
+              <button data-memory-action="forget" data-memory-collection="${escapeHtml(collection)}" data-memory-id="${escapeHtml(result.id)}" type="button">Forget</button>
               <button data-delete-memory="${escapeHtml(result.id)}" type="button">Delete</button>
             </div>
           </article>
@@ -2050,6 +2216,7 @@ function renderMemorySearchResults(collection, query, results) {
     </div>
   `;
   bindMemoryRecordActions($('memoryResults'));
+  bindMemoryTransitionActions($('memoryResults'));
 }
 
 async function consolidateSession() {

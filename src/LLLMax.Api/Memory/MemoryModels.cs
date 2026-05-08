@@ -32,6 +32,18 @@ public sealed record MemoryRecordUpdateRequest(
     string Text,
     IReadOnlyDictionary<string, string>? Metadata = null);
 
+public sealed record MemoryRecordEditRequest(
+    string Text,
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    string? Why = null);
+
+public sealed record MemoryRecordSupersedeRequest(
+    string Text,
+    IReadOnlyDictionary<string, string>? Metadata = null,
+    string? Why = null);
+
+public sealed record MemoryRecordForgetRequest(string? Why = null);
+
 public sealed record MemoryRecord(
     string Id,
     string Collection,
@@ -74,6 +86,30 @@ public sealed record MemoryRecordDetail(
     int TextLength,
     IReadOnlyDictionary<string, string> Metadata);
 
+public sealed record MemoryRecordTransitionResponse(
+    MemoryRecordDetail Original,
+    MemoryRecordDetail? Replacement = null,
+    string Action = "updated");
+
+public sealed record MemoryRecordWhyResponse(
+    string Id,
+    string Collection,
+    string Text,
+    string MemoryState,
+    string? MemoryType,
+    string? Provenance,
+    string? ObservedAt,
+    string? ValidFrom,
+    string? ValidUntil,
+    string? SourceConversationId,
+    string? SourceMessageRole,
+    string? SourceRecordId,
+    string? Supersedes,
+    string? SupersededBy,
+    string? Why,
+    IReadOnlyDictionary<string, string> Metadata,
+    IReadOnlyList<string> Explanation);
+
 public sealed record MemoryCollectionRecordPreview(
     string Id,
     string TextPreview,
@@ -106,6 +142,16 @@ public sealed record MemoryGraphRequest(
     IReadOnlyList<string>? Types = null,
     IReadOnlyDictionary<string, string>? Filter = null);
 
+public sealed record MemoryGraphNodeInspectRequest(
+    string Layer = MemoryLayers.Memory,
+    string? Query = null,
+    int Limit = 24,
+    string? NodeId = null,
+    string? RecordId = null,
+    string? Label = null,
+    IReadOnlyList<string>? Types = null,
+    IReadOnlyDictionary<string, string>? Filter = null);
+
 public sealed record MemoryGraphResponse(
     string Layer,
     string? Query,
@@ -133,6 +179,25 @@ public sealed record MemoryGraphEdge(
     double Weight,
     string Kind);
 
+public sealed record MemoryGraphNodeInspectResponse(
+    string Layer,
+    string? NodeId,
+    string? Label,
+    string? RecordId,
+    IReadOnlyList<MemoryGraphRelatedRecord> Records,
+    IReadOnlyList<string> Concepts);
+
+public sealed record MemoryGraphRelatedRecord(
+    string Id,
+    string Collection,
+    string Text,
+    string? MemoryType,
+    string? Provenance,
+    string? ObservedAt,
+    string MemoryState,
+    IReadOnlyDictionary<string, string> Metadata,
+    IReadOnlyList<string> MatchedConcepts);
+
 public sealed record MemoryReviewResponse(
     int PendingCount,
     int DuplicateGroupCount,
@@ -147,6 +212,7 @@ public sealed record MemoryReviewItem(
     string? Provenance,
     string? Confidence,
     string? ObservedAt,
+    string? MemoryState,
     IReadOnlyDictionary<string, string> Metadata);
 
 public sealed record MemoryDuplicateGroup(
