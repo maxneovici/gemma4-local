@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using LLLMax.Api.Memory;
 using LLLMax.Api.Models;
 using LLLMax.Api.Options;
@@ -42,7 +43,7 @@ public sealed class AgentRuntime(
                 SessionId: request.ConversationId);
         }
 
-        var memoryContext = await BuildMemoryContextAsync(agent, request.Message, cancellationToken);
+        var memoryContext = await BuildMemoryContextAsync(agent, request.Message, RequiresFreshBrowsing(request.Message), cancellationToken);
         var toolContext = BuildToolContext(agent, request.AllowTools);
         var subagentContext = BuildSubagentContext(agent);
         var skillContext = BuildSkillContext(agent, request.Message);
@@ -58,13 +59,23 @@ public sealed class AgentRuntime(
         var messages = BuildInitialMessages(request, prompt);
         var maxIterations = Math.Clamp(request.MaxToolIterations ?? _options.Orchestration.MaxToolIterations, 1, 12);
         var retriedRequiredSmartHomeTool = false;
+        var retriedFreshnessBrowsing = false;
+        var pendingFreshBrowseUrls = new Queue<string>();
+        var browsedFreshUrls = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         LocalChatResponse response = default!;
 
         for (var iteration = 0; iteration <= maxIterations; iteration++)
         {
             ParsedToolCall? toolCall = null;
 
-            if (ShouldUseNativeToolCalling(request.AllowTools, allowedTools))
+            if (request.AllowTools && pendingFreshBrowseUrls.Count > 0)
+            {
+                var browseUrl = pendingFreshBrowseUrls.Dequeue();
+                toolCall = CreateToolCall("web_browse", new Dictionary<string, string> { ["url"] = browseUrl });
+                response = new LocalChatResponse(route.Model, ToolCallToJson(toolCall), null, null, null);
+                reasoningSteps.Add(new ReasoningStep("forced_tool_call", $"web_browse: {browseUrl}", DateTimeOffset.UtcNow));
+            }
+            else if (ShouldUseNativeToolCalling(request.AllowTools, allowedTools))
             {
                 await PublishAsync(request, new AgentRuntimeEvent(
                     Kind: "model_started",
@@ -110,6 +121,11 @@ public sealed class AgentRuntime(
                 ToolCallParser.TryParse(response.Response, out toolCall);
             }
 
+            if (toolCall is not null)
+            {
+                toolCall = NormalizeToolCall(agent, toolCall, request.Message);
+            }
+
             if (request.AllowTools
                 && toolCall is null
                 && !retriedRequiredSmartHomeTool
@@ -122,9 +138,36 @@ public sealed class AgentRuntime(
                 continue;
             }
 
-            if (toolCall is not null)
+            if (request.AllowTools
+                && toolCall is null
+                && !retriedFreshnessBrowsing
+                && RequiresFreshBrowsing(request.Message)
+                && !toolResults.Any(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)))
             {
-                toolCall = NormalizeToolCall(agent, toolCall, request.Message);
+                foreach (var url in InferFreshBrowseUrls(request.Message).Where(url => !browsedFreshUrls.Contains(url)))
+                {
+                    pendingFreshBrowseUrls.Enqueue(url);
+                }
+
+                if (pendingFreshBrowseUrls.Count > 0)
+                {
+                    retriedFreshnessBrowsing = true;
+                    reasoningSteps.Add(new ReasoningStep("tool_retry", "Retrying because this current web/news/reddit request has concrete browse targets.", DateTimeOffset.UtcNow));
+                    continue;
+                }
+            }
+
+            if (request.AllowTools
+                && toolCall is null
+                && !retriedFreshnessBrowsing
+                && RequiresFreshBrowsing(request.Message)
+                && toolResults.Any(result => result.Tool.Equals("memory_search", StringComparison.OrdinalIgnoreCase))
+                && !toolResults.Any(result => result.Tool.Equals("web_browse", StringComparison.OrdinalIgnoreCase)))
+            {
+                retriedFreshnessBrowsing = true;
+                reasoningSteps.Add(new ReasoningStep("tool_retry", "Retrying because current web/news/reddit requests require web_browse after memory lookup.", DateTimeOffset.UtcNow));
+                messages = AppendRequiredFreshBrowsingInstruction(messages, request.Message, toolResults.Last(result => result.Tool.Equals("memory_search", StringComparison.OrdinalIgnoreCase)).Result);
+                continue;
             }
 
             if (!request.AllowTools || toolCall is null)
@@ -215,12 +258,44 @@ public sealed class AgentRuntime(
             citations.AddRange(result.Citations ?? []);
             toolResults.Add(new ToolExecutionResult(tool.Name, result.Content));
             reasoningSteps.Add(new ReasoningStep("tool_result", result.Content, DateTimeOffset.UtcNow));
+            var toolResultForPrompt = result.Content;
+
+            if (RequiresFreshBrowsing(request.Message) && tool.Name.Equals("web_browse", StringComparison.OrdinalIgnoreCase))
+            {
+                if (traceArguments.TryGetValue("url", out var browsedUrl) && !string.IsNullOrWhiteSpace(browsedUrl))
+                {
+                    browsedFreshUrls.Add(browsedUrl);
+                }
+            }
+
+            if (RequiresFreshBrowsing(request.Message) && tool.Name.Equals("memory_search", StringComparison.OrdinalIgnoreCase))
+            {
+                var urls = ExtractFreshBrowseUrls(result.Content, request.Message)
+                    .Where(url => !browsedFreshUrls.Contains(url))
+                    .Where(url => !pendingFreshBrowseUrls.Contains(url, StringComparer.OrdinalIgnoreCase))
+                    .ToList();
+                toolResultForPrompt = FormatFreshMemorySearchResult(urls);
+
+                foreach (var url in urls)
+                {
+                    pendingFreshBrowseUrls.Enqueue(url);
+                }
+
+                if (urls.Count > 0)
+                {
+                    reasoningSteps.Add(new ReasoningStep("tool_retry", $"Queued {urls.Count} remembered source(s) for fresh browsing.", DateTimeOffset.UtcNow));
+                    await PublishAsync(request, new AgentRuntimeEvent(
+                        Kind: "tool_started",
+                        Content: $"Found {urls.Count} remembered source(s). Browsing them before answering..."), cancellationToken);
+                }
+            }
+
             await PublishAsync(request, new AgentRuntimeEvent(
                 Kind: "tool_completed",
                 Content: DescribeToolCompleted(tool.Name),
                 Tool: tool.Name,
                 Result: result.Content), cancellationToken);
-            messages = AppendToolResult(messages, response.Response, tool.Name, result.Content);
+            messages = AppendToolResult(messages, response.Response, tool.Name, toolResultForPrompt, RequiresFreshBrowsing(request.Message));
         }
 
         if (request.PersistToMemory)
@@ -255,6 +330,8 @@ public sealed class AgentRuntime(
         {
             "memory_search" => $"Searching memory for {Quote(arguments.GetValueOrDefault("query"))}...",
             "web_browse" => $"Checking {DisplayUrl(arguments.GetValueOrDefault("url"))}...",
+            "deep_research_web" => "Scheduling deep web research...",
+            "deep_research" => "Scheduling deep local research...",
             "delegate_to_agent" => $"Delegating to {arguments.GetValueOrDefault("agent") ?? "another agent"}...",
             "schedule_background_job" => $"Scheduling {arguments.GetValueOrDefault("kind") ?? "background work"}...",
             "document_vectorize_folder" => $"Vectorizing {arguments.GetValueOrDefault("folderPath") ?? "folder"}...",
@@ -278,6 +355,8 @@ public sealed class AgentRuntime(
         {
             "memory_search" => "Memory search complete. Reviewing matches...",
             "web_browse" => "Page fetched. Reading the content...",
+            "deep_research_web" => "Deep web research scheduled.",
+            "deep_research" => "Deep local research scheduled.",
             "delegate_to_agent" => "Delegated work complete. Reviewing result...",
             "schedule_background_job" => "Background job scheduled.",
             "document_vectorize_folder" => "Vectorization complete. Reviewing result...",
@@ -337,6 +416,8 @@ Personal context and freshness rules:
 - When the user says "my", "mine", "favorite", "usual", "remember", "from before", or similar personal/contextual references and the needed value is not explicit in the current turn, first use memory_search rather than guessing from conversation text.
 - If memory identifies URLs, domains, APIs, documents, or other targets and the user asks to check, fetch, research, summarize, update, compare, or verify current information, continue with the appropriate tool such as web_browse after memory_search.
 - Do not stop after restating remembered targets when the user asked you to act on them. Use the remembered targets to continue the task unless a required target is still missing.
+- For current news, latest headlines, Reddit reactions, or today's updates, never answer from memory alone. Use memory only to find preferred sources or interests, then call web_browse on concrete URLs and summarize only browsed content.
+- For Reddit requests, infer the appropriate subreddit URL from the user's wording and use web_browse. If Reddit returns a verification, login, or app wall, follow the web_browse tool guidance and try an appropriate public listing URL such as /r/<subreddit>/top/?t=day or old.reddit.com before reporting that browsing is blocked.
 - Build a durable local profile of the user over time. When the user shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project.
 - Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
 - Use remembered profile information to personalize tone and defaults, but never let personality override tool-use safety, routing, citations, or local-only constraints.
@@ -359,6 +440,8 @@ Background work:
 - You can use schedule_background_job for long-running local work that should continue after the chat turn returns.
 - Available background job kinds include document_vectorize_folder, memory_report, web_research, and memory_consolidation. Provide the payload expected by the job kind.
 - Use memory_consolidation with a payload containing sessionId=current session id when the user asks to preserve session learnings in the background.
+- Do not call background job kind names such as web_research as tools. Use deep_research_web for background web research and deep_research for background local-memory research.
+- Use web_browse directly for ordinary news headlines, simple website summaries, Reddit pages, and quick current-information checks.
 - Skill create/update tools are foreground approval-gated operations today; use background jobs for large research or verification that informs a skill.
 
 Available delegate agents:
@@ -412,12 +495,20 @@ Loop guardrails:
         IReadOnlyList<LocalChatMessage> messages,
         string assistantToolCall,
         string toolName,
-        string toolResult) =>
+        string toolResult,
+        bool enforceFreshBrowsingRules = false)
+    {
+        var nextInstruction = enforceFreshBrowsingRules && toolName.Equals("web_browse", StringComparison.OrdinalIgnoreCase)
+            ? "Continue the task. For current/fresh information, use only web_browse results as factual source material. memory_search results may identify which sources to browse, but do not use memory-only headlines, summaries, dates, or claims in the final answer. Emit another JSON tool call only if more browsing is required; otherwise provide the final answer."
+            : "Continue the task. Emit another JSON tool call only if more tool work is required; otherwise provide the final answer.";
+
+        return
         [
             .. messages,
             new LocalChatMessage("assistant", assistantToolCall),
-            new LocalChatMessage("user", $"Tool {toolName} returned this result:\n{toolResult}\n\nContinue the task. Emit another JSON tool call only if more tool work is required; otherwise provide the final answer.")
+            new LocalChatMessage("user", $"Tool {toolName} returned this result:\n{toolResult}\n\n{nextInstruction}")
         ];
+    }
 
     private static IReadOnlyList<LocalChatMessage> AppendRequiredSmartHomeToolInstruction(
         IReadOnlyList<LocalChatMessage> messages,
@@ -428,8 +519,117 @@ Loop guardrails:
             new LocalChatMessage("user", $"The previous response did not call a tool. For this request, emit exactly one smart_home JSON tool call now and no final answer: {originalMessage}")
         ];
 
+    private static IReadOnlyList<LocalChatMessage> AppendRequiredFreshBrowsingInstruction(
+        IReadOnlyList<LocalChatMessage> messages,
+        string originalMessage,
+        string memoryResult) =>
+        [
+            .. messages,
+            new LocalChatMessage("assistant", "I found remembered targets, but current information must be fetched before answering."),
+            new LocalChatMessage("user", $"The previous response answered without browsing. For this request, use the remembered targets below and emit exactly one web_browse JSON tool call now; do not answer yet. Original request: {originalMessage}\n\nRemembered targets/context:\n{memoryResult}")
+        ];
+
     private static bool RequiresSmartHomeTool(AgentDefinition agent, string message) =>
         IsToolAllowed(agent, "smart_home") && IsSmartHomeCommand(message);
+
+    private static bool RequiresFreshBrowsing(string message)
+    {
+        var lower = message.ToLowerInvariant();
+        return ContainsAny(lower, "latest", "current", "today", "headline", "headlines", "news", "reddit", "reactions", "browse", "check", "summarize")
+            && ContainsAny(lower, "site", "sites", "website", "websites", "source", "sources", "reddit", "news", "headline", "headlines", "reaction", "reactions", "favorite");
+    }
+
+    private static IReadOnlyList<string> ExtractFreshBrowseUrls(string memoryResult, string originalMessage) =>
+        ExtractBrowseTargets(memoryResult, skipMemoryMetadataLines: true)
+            .Concat(InferFreshBrowseUrls(originalMessage))
+            .DistinctBy(CanonicalBrowseTargetKey)
+            .Take(4)
+            .ToList();
+
+    private static IReadOnlyList<string> InferFreshBrowseUrls(string message) =>
+        ExtractBrowseTargets(message, skipMemoryMetadataLines: false)
+            .DistinctBy(CanonicalBrowseTargetKey)
+            .Take(4)
+            .ToList();
+
+    private static string FormatFreshMemorySearchResult(IReadOnlyList<string> urls) =>
+        urls.Count == 0
+            ? "Memory search did not identify concrete browse targets. Do not use memory_search content as current information. Ask for a URL or source if needed."
+            : $"Memory search identified these browse targets only:{Environment.NewLine}{string.Join(Environment.NewLine, urls.Select(url => $"- {url}"))}{Environment.NewLine}{Environment.NewLine}Do not use memory_search content as current headlines, dates, summaries, or facts. Browse these targets before answering.";
+
+    private static string CanonicalBrowseTargetKey(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return url.ToLowerInvariant();
+        }
+
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase)
+            ? uri.Host[4..]
+            : uri.Host;
+        var path = uri.AbsolutePath == "/" ? string.Empty : uri.AbsolutePath.TrimEnd('/');
+
+        return $"{host.ToLowerInvariant()}{path.ToLowerInvariant()}";
+    }
+
+    private static IEnumerable<string> ExtractBrowseTargets(string text, bool skipMemoryMetadataLines)
+    {
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            if (skipMemoryMetadataLines && line.StartsWith("[", StringComparison.OrdinalIgnoreCase) && line.Contains("source=", StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            foreach (Match match in Regex.Matches(line, @"(?<![@\w/-])(?:https?://)?(?:www\.)?[a-z0-9][a-z0-9-]*(?:\.[a-z0-9][a-z0-9-]*)+(?::\d+)?(?:/[^\s<>()\]]*)?", RegexOptions.IgnoreCase))
+            {
+                var normalized = NormalizeBrowseTarget(match.Value);
+
+                if (normalized is not null)
+                {
+                    yield return normalized;
+                }
+            }
+        }
+    }
+
+    private static string? NormalizeBrowseTarget(string value)
+    {
+        var candidate = value.Trim().TrimEnd('.', ',', ';', ':', ')', ']', '}', '"', '\'', '>', '<');
+
+        if (string.IsNullOrWhiteSpace(candidate))
+        {
+            return null;
+        }
+
+        var hasScheme = candidate.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+            || candidate.StartsWith("https://", StringComparison.OrdinalIgnoreCase);
+
+        if (!hasScheme && LooksLikeFilename(candidate))
+        {
+            return null;
+        }
+
+        if (!hasScheme)
+        {
+            candidate = $"https://{candidate}";
+        }
+
+        return Uri.TryCreate(candidate, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https"
+            ? uri.ToString()
+            : null;
+    }
+
+    private static bool LooksLikeFilename(string value)
+    {
+        if (value.Contains('/'))
+        {
+            return false;
+        }
+
+        var extension = value.Split('.').LastOrDefault()?.ToLowerInvariant();
+        return extension is "cs" or "md" or "json" or "txt" or "xml" or "yaml" or "yml" or "js" or "ts" or "tsx" or "jsx" or "css" or "html" or "csproj" or "sln";
+    }
 
     private static bool IsSmartHomeCommand(string message)
     {
@@ -485,7 +685,7 @@ Loop guardrails:
         return builder.Length == 0 ? "No relevant skills selected." : builder.ToString();
     }
 
-    private async Task<string> BuildMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
+    private async Task<string> BuildMemoryContextAsync(AgentDefinition agent, string message, bool freshBrowsingRequest, CancellationToken cancellationToken)
     {
         if (!_options.Memory.Enabled)
         {
@@ -513,10 +713,45 @@ Loop guardrails:
         foreach (var memory in memories)
         {
             var kind = memory.Metadata.TryGetValue("kind", out var memoryKind) ? memoryKind : "memory";
-            builder.AppendLine($"- [{memory.Score:0.000}] ({kind}) {memory.Text}");
+            var text = freshBrowsingRequest ? FormatFreshMemoryContextText(memory.Text) : memory.Text;
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                continue;
+            }
+
+            builder.AppendLine($"- [{memory.Score:0.000}] ({kind}) {text}");
         }
 
-        return builder.ToString();
+        if (builder.Length == 0)
+        {
+            return "No relevant memories found.";
+        }
+
+        return freshBrowsingRequest
+            ? $"Fresh/current request: memory below may only identify sources, interests, or browse targets. Do not use memory text as current facts, headlines, dates, or summaries.{Environment.NewLine}{builder}"
+            : builder.ToString();
+    }
+
+    private static string FormatFreshMemoryContextText(string text)
+    {
+        var targets = ExtractBrowseTargets(text, skipMemoryMetadataLines: false)
+            .DistinctBy(CanonicalBrowseTargetKey)
+            .Take(4)
+            .ToList();
+
+        if (targets.Count > 0)
+        {
+            return $"Remembered browse targets only: {string.Join(", ", targets)}";
+        }
+
+        if (!ContainsAny(text.ToLowerInvariant(), "source", "sources", "site", "sites", "website", "websites", "reddit", "news"))
+        {
+            return string.Empty;
+        }
+
+        var firstLine = text.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() ?? text;
+        return firstLine.Length <= 220 ? firstLine : firstLine[..220];
     }
 
     private async Task<IReadOnlyList<MemorySearchResult>> SearchMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
@@ -601,6 +836,36 @@ Loop guardrails:
 
     private static ParsedToolCall NormalizeToolCall(AgentDefinition agent, ParsedToolCall toolCall, string fallbackMessage)
     {
+        if (toolCall.Tool.Equals("web_research", StringComparison.OrdinalIgnoreCase))
+        {
+            var firstUrl = TryGetStringArgument(toolCall.Arguments, "url")
+                ?? TryGetFirstStringArrayArgument(toolCall.Arguments, "urls");
+
+            if (firstUrl is not null && IsToolAllowed(agent, "web_browse"))
+            {
+                return CreateToolCall("web_browse", new Dictionary<string, string> { ["url"] = firstUrl });
+            }
+
+            if (IsToolAllowed(agent, "deep_research_web"))
+            {
+                var question = TryGetStringArgument(toolCall.Arguments, "question")
+                    ?? TryGetStringArgument(toolCall.Arguments, "query")
+                    ?? fallbackMessage;
+                var urls = TryGetStringArrayArgument(toolCall.Arguments, "urls");
+
+                if (urls.Count > 0)
+                {
+                    var researchArguments = new Dictionary<string, JsonElement>
+                    {
+                        ["question"] = JsonSerializer.SerializeToElement(question),
+                        ["urls"] = JsonSerializer.SerializeToElement(urls)
+                    };
+
+                    return new ParsedToolCall("deep_research_web", researchArguments);
+                }
+            }
+        }
+
         if (toolCall.Tool.Equals("delegate_to_agent", StringComparison.OrdinalIgnoreCase)
             || agent.AllowedAgents?.Contains(toolCall.Tool, StringComparer.OrdinalIgnoreCase) != true
             || !IsToolAllowed(agent, "delegate_to_agent"))
@@ -621,10 +886,38 @@ Loop guardrails:
         return new ParsedToolCall("delegate_to_agent", arguments);
     }
 
+    private static ParsedToolCall CreateToolCall(string tool, IReadOnlyDictionary<string, string> arguments) =>
+        new(tool, arguments.ToDictionary(pair => pair.Key, pair => JsonSerializer.SerializeToElement(pair.Value)));
+
+    private static string ToolCallToJson(ParsedToolCall toolCall) =>
+        JsonSerializer.Serialize(new Dictionary<string, object?>
+        {
+            ["tool"] = toolCall.Tool,
+            ["arguments"] = toolCall.Arguments
+        });
+
     private static string? TryGetStringArgument(IReadOnlyDictionary<string, JsonElement> arguments, string name) =>
         arguments.TryGetValue(name, out var value) && value.ValueKind == JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static string? TryGetFirstStringArrayArgument(IReadOnlyDictionary<string, JsonElement> arguments, string name) =>
+        TryGetStringArrayArgument(arguments, name).FirstOrDefault();
+
+    private static IReadOnlyList<string> TryGetStringArrayArgument(IReadOnlyDictionary<string, JsonElement> arguments, string name)
+    {
+        if (!arguments.TryGetValue(name, out var value) || value.ValueKind != JsonValueKind.Array)
+        {
+            return [];
+        }
+
+        return value.EnumerateArray()
+            .Where(item => item.ValueKind == JsonValueKind.String)
+            .Select(item => item.GetString())
+            .Where(item => !string.IsNullOrWhiteSpace(item))
+            .Select(item => item!)
+            .ToList();
+    }
 
     private AgentModelRoute ResolveRoute(AgentDefinition agent, AgentRunRequest request)
     {

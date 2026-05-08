@@ -108,6 +108,8 @@ builder.Services.AddSingleton<ILocalTool, AgentDelegationTool>();
 builder.Services.AddSingleton<ILocalTool, MemorySearchTool>();
 builder.Services.AddSingleton<ILocalTool, MemoryWriteTool>();
 builder.Services.AddSingleton<ILocalTool, WebBrowseTool>();
+builder.Services.AddSingleton<ILocalTool, DeepResearchWebTool>();
+builder.Services.AddSingleton<ILocalTool, DeepResearchTool>();
 builder.Services.AddSingleton<ILocalTool, ApiIntegrationTool>();
 builder.Services.AddSingleton<ILocalTool, DocumentVectorizeTool>();
 builder.Services.AddSingleton<ILocalTool, ScheduleBackgroundJobTool>();

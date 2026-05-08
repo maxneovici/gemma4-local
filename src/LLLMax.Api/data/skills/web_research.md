@@ -23,6 +23,9 @@ Use this when the user asks for current external information, headlines, Reddit 
 
 - If the target is personal or implicit, such as "my favorite sites", use `memory_search` first to recover the target URLs or names.
 - Use `web_browse` for each concrete URL or source needed to answer the request.
+- Use `web_browse` directly for ordinary news headlines, Reddit pages, docs, and simple web summaries. Do not use deep research for these.
+- Use `deep_research_web` only when the user explicitly wants long-running background research across multiple pages, a durable report, or work that should continue after the chat turn.
+- Never call `web_research`; it is a background job kind, not a foreground tool.
 - Do not stop after finding remembered targets; continue browsing when the user asked to check or summarize current information.
 - Prefer a small number of high-signal sources over broad unfocused browsing.
 - Summarize only after tool results are available.

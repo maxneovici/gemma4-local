@@ -136,8 +136,11 @@ public sealed class AssistantOrchestrator(
                 var messages = session.Messages.Concat([userMessage]).ToList();
                 Func<AgentRuntimeEvent, CancellationToken, Task> onEvent = async (runtimeEvent, token) =>
                 {
+                    var payload = new { runtimeEvent, graph = (object?)null };
+
                     if (runtimeEvent.Tool is null)
                     {
+                        await channel.Writer.WriteAsync(new SessionChatStreamEvent("progress", runtimeEvent.Content, Payload: payload), token);
                         return;
                     }
 

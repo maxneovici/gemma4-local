@@ -133,9 +133,11 @@ function renderMessageCitations(citations) {
 
 function renderRuntime(health) {
   const highModel = state.models.find(model => model.name === 'gemma4:31b');
+  const coordinator = state.coordinatorModel?.currentCoordinatorModel ?? 'unknown';
   $('runtime').innerHTML = `
     <div class="runtime-pill ${health?.isHealthy ? 'healthy' : 'unknown'}"><span>ollama</span><strong>${health?.isHealthy ? 'healthy' : 'unknown'}</strong></div>
     <div class="runtime-pill"><span>models</span><strong>${escapeHtml(String(state.models.length))}</strong></div>
+    <div class="runtime-pill"><span>coordinator</span><strong>${escapeHtml(coordinator)}</strong></div>
     <div class="runtime-pill"><span>31b</span><strong>${escapeHtml(highModel ? `${highModel.sizeGb} GB` : 'missing')}</strong></div>
     <div class="runtime-pill ${state.sessionId ? 'healthy' : ''}"><span>session</span><strong>${state.sessionId ? 'active' : 'none'}</strong></div>
   `;
@@ -255,9 +257,19 @@ function isGuidLike(value) {
 
 async function loadModels() {
   state.models = await api('/models');
+  state.coordinatorModel = await api('/models/coordinator');
   $('modelSelect').innerHTML = '<option value="">Coordinator default</option>' + state.models.map(model => `
     <option value="${escapeHtml(model.name)}">${escapeHtml(model.name)}</option>
   `).join('');
+  $('modelSelect').value = state.coordinatorModel?.coordinatorOverride ?? '';
+}
+
+async function setCoordinatorModel(model) {
+  state.coordinatorModel = await api('/models/coordinator', {
+    method: 'PUT',
+    body: JSON.stringify({ model: model || null })
+  });
+  renderRuntime(await api('/health'));
 }
 
 async function loadAgents() {
@@ -957,7 +969,6 @@ async function newSession() {
     id: `draft-${crypto.randomUUID()}`,
     title: 'LLLMax session',
     agent: 'coordinator',
-    model: $('modelSelect').value || null,
     createdAt: now,
     updatedAt: now,
     messages: []
@@ -992,7 +1003,7 @@ async function openSession(id) {
   state.sessionId = session.id;
   knownJobStates = new Map();
   $('sessionTitle').textContent = session.title;
-  $('modelSelect').value = session.model ?? '';
+  $('modelSelect').value = state.coordinatorModel?.coordinatorOverride ?? '';
   state.selectedTraceId = null;
   renderMessages(session.messages ?? []);
   await Promise.all([loadSessions(), loadTaskGraph(), loadConsolidationJobs(), loadBackgroundJobs(), loadApprovals(), loadPatchProposals(), loadMcpServers()]);
@@ -1005,8 +1016,7 @@ async function ensurePersistedSession() {
     method: 'POST',
     body: JSON.stringify({
       title: state.draftSession?.title ?? 'LLLMax session',
-      agent: state.draftSession?.agent ?? 'coordinator',
-      model: $('modelSelect').value || state.draftSession?.model || null
+      agent: state.draftSession?.agent ?? 'coordinator'
     })
   });
   state.sessionId = session.id;
@@ -1111,7 +1121,7 @@ async function streamChat(path, options) {
         }
 
         if (event.type === 'progress' && event.content) {
-          progressHistory = [...progressHistory, event.content].slice(-4);
+          progressHistory = [...progressHistory, formatProgressEvent(event)].slice(-6);
           setInlineProgress(progressHistory);
           if (event.payload?.graph) {
             state.taskGraph = event.payload.graph;
@@ -1158,6 +1168,13 @@ async function streamChat(path, options) {
   }
 
   return finalResult;
+}
+
+function formatProgressEvent(event) {
+  const runtimeEvent = event.payload?.runtimeEvent;
+  const tool = runtimeEvent?.tool;
+  const prefix = tool?.includes('/') ? tool.split('/').map(part => `[${part}]`).join(' ') + ' ' : '';
+  return `${prefix}${event.content}`;
 }
 
 async function recoverFinalResponse() {
@@ -1519,6 +1536,7 @@ $('prompt').addEventListener('keydown', event => {
   }
 });
 $('effort').addEventListener('input', event => $('effortLabel').textContent = effortMap[event.target.value]);
+$('modelSelect').addEventListener('change', event => guarded(() => setCoordinatorModel(event.target.value), 'Updating coordinator model...', { overlay: false }));
 $('uploadDocument').addEventListener('click', uploadDocument);
 $('runOcr').addEventListener('click', () => runDocumentAction('/documents/ocr'));
 $('extractInvoice').addEventListener('click', () => runDocumentAction('/documents/extract-invoice'));

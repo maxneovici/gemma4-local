@@ -12,7 +12,7 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
 
     public override string Name => "web_browse";
 
-    public override string Description => "Fetch an HTTP or HTTPS page and return sanitized text for local reasoning.";
+    public override string Description => "Fetch an HTTP or HTTPS page and return sanitized text for local reasoning. For Reddit or similar pages that return verification, login, or app walls, try the public subreddit/top or old.reddit listing URL in a follow-up web_browse call when appropriate; for example use /r/<subreddit>/top/?t=day for current top reactions.";
 
     protected override async Task<LocalToolResult> InvokeAsync(WebBrowseArguments arguments, LocalToolInvocation invocation, CancellationToken cancellationToken)
     {
@@ -43,7 +43,7 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             : text[.._options.WebBrowsing.MaxResponseCharacters];
 
         return new LocalToolResult(
-            $"URL: {uri}\n\n{content}",
+            $"URL: {uri}\n\n{content}\n\n{GuidanceFor(uri, content)}",
             [new CitationSource("web", uri.Host, Url: uri.ToString(), Source: uri.ToString())]);
     }
 
@@ -55,6 +55,23 @@ public sealed class WebBrowseTool(IHttpClientFactory httpClientFactory, IOptions
             .Pipe(value => Regex.Replace(value, "<[^>]+>", " "))
             .Pipe(value => Regex.Replace(value, "\\s+", " "))
             .Trim();
+
+    private static string GuidanceFor(Uri uri, string content)
+    {
+        if (!uri.Host.Contains("reddit.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        if (!content.Contains("verification", StringComparison.OrdinalIgnoreCase)
+            && !content.Contains("log in", StringComparison.OrdinalIgnoreCase)
+            && !content.Contains("app", StringComparison.OrdinalIgnoreCase))
+        {
+            return "";
+        }
+
+        return "Tool guidance: Reddit returned a verification/login/app wall. If the user asked for current subreddit reactions, choose a follow-up web_browse URL such as https://www.reddit.com/r/<subreddit>/top/?t=day or https://old.reddit.com/r/<subreddit>/top/?t=day based on the subreddit in the request. If that also fails, say browsing is blocked rather than inventing reactions.";
+    }
 }
 
 public sealed record WebBrowseArguments([property: Required] string Url);
