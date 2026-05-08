@@ -24,9 +24,11 @@ public static class MemoryEndpoints
         {
             try
             {
-                return Results.Ok(string.IsNullOrWhiteSpace(request.Collection)
+                var results = string.IsNullOrWhiteSpace(request.Collection)
                     ? await SearchDefaultMemoryBandsAsync(request, memoryStore, cancellationToken)
-                    : await memoryStore.SearchAsync(request, cancellationToken));
+                    : await memoryStore.SearchAsync(request, cancellationToken);
+
+                return Results.Ok(results.Where(result => !IsNegativeKnowledgeMemory(result.Text)).ToList());
             }
             catch (InvalidOperationException exception)
             {
@@ -135,6 +137,7 @@ public static class MemoryEndpoints
         await ExpandRelatedCoreProfileMemoriesAsync(bands, memoryStore, cancellationToken);
 
         return bands
+            .Where(item => !IsNegativeKnowledgeMemory(item.Result.Text))
             .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(RankDefaultMemoryResult).First())
             .OrderByDescending(RankDefaultMemoryResult)
@@ -214,12 +217,39 @@ public static class MemoryEndpoints
 
             foreach (var record in related.Records)
             {
+                if (IsNegativeKnowledgeMemory(record.TextPreview))
+                {
+                    continue;
+                }
+
                 var metadata = record.Metadata.ToDictionary(StringComparer.OrdinalIgnoreCase);
                 metadata.TryAdd("collection", "core");
                 bands.Add((new MemorySearchResult(record.Id, record.TextPreview, Math.Max(0, seed.Score - 0.01), metadata), seed.Priority));
             }
         }
     }
+
+    private static bool IsNegativeKnowledgeMemory(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return ContainsAny(lower,
+            "no specific information was provided",
+            "no specific information",
+            "i do not have specific information",
+            "i don't have specific information",
+            "do not have any specific information",
+            "don't have any specific information",
+            "not in my current memory",
+            "i don't have that detail",
+            "i do not have that detail",
+            "i don't know",
+            "i do not know",
+            "must have hallucinated",
+            "seems i must have hallucinated");
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static string? GetMetadata(IReadOnlyDictionary<string, string> metadata, string key) =>
         metadata.TryGetValue(key, out var value) && !string.IsNullOrWhiteSpace(value) ? value : null;

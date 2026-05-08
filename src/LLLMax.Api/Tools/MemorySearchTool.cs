@@ -67,6 +67,7 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
         await ExpandRelatedCoreProfileMemoriesAsync(bands, cancellationToken);
 
         return bands
+            .Where(item => !IsNegativeKnowledgeMemory(item.Result.Text))
             .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderByDescending(RankDefaultMemoryResult).First())
             .OrderByDescending(RankDefaultMemoryResult)
@@ -94,6 +95,28 @@ public sealed class MemorySearchTool(ILocalMemoryStore memoryStore) : LocalToolB
             bands.Add((WithCollectionMetadata(result, collection), priority));
         }
     }
+
+    private static bool IsNegativeKnowledgeMemory(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return ContainsAny(lower,
+            "no specific information was provided",
+            "no specific information",
+            "i do not have specific information",
+            "i don't have specific information",
+            "do not have any specific information",
+            "don't have any specific information",
+            "not in my current memory",
+            "i don't have that detail",
+            "i do not have that detail",
+            "i don't know",
+            "i do not know",
+            "must have hallucinated",
+            "seems i must have hallucinated");
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static IReadOnlyDictionary<string, string>? MergeFilter(IReadOnlyDictionary<string, string>? left, IReadOnlyDictionary<string, string> right)
     {

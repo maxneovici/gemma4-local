@@ -1698,7 +1698,7 @@ async function consolidateSession() {
       body: JSON.stringify({ sessionId: state.sessionId })
     });
     await Promise.all([loadMemoryStats(), loadConsolidationJobs()]);
-  }, 'Consolidating memory...');
+  }, 'Syncing durable memory...');
 }
 
 async function reflectMemory() {

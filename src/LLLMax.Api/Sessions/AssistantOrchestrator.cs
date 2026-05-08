@@ -434,7 +434,7 @@ public sealed class AssistantOrchestrator(
 
         var completedTurns = messages.Count(message => message.Role.Equals("user", StringComparison.OrdinalIgnoreCase));
 
-        if (completedTurns < 4 || completedTurns % 4 != 0)
+        if (completedTurns < 2 || completedTurns % 2 != 0)
         {
             return;
         }
@@ -443,7 +443,7 @@ public sealed class AssistantOrchestrator(
         await backgroundJobs.EnqueueAsync(new BackgroundJobCreateRequest(
             Kind: BackgroundJobKinds.MemoryConsolidation,
             Payload: payload,
-            Title: "Consolidate session memory",
+            Title: "Sync session memory",
             SessionId: sessionId,
             Agent: _options.Orchestration.DefaultAgent,
             NotifySession: false), cancellationToken);

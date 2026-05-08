@@ -45,7 +45,8 @@ public sealed class AgentRuntime(
                 SessionId: request.ConversationId);
         }
 
-        var memoryContext = await BuildMemoryContextAsync(agent, request.Message, RequiresFreshBrowsing(request.Message), cancellationToken);
+        var memoryQuery = BuildMemoryQuery(request);
+        var memoryContext = await BuildMemoryContextAsync(agent, request.Message, memoryQuery, RequiresFreshBrowsing(request.Message), cancellationToken);
         var foundationProfileContext = FoundationUserProfileFormatter.FormatForPrompt(await foundationProfile.GetAsync(cancellationToken));
         var personalContext = string.IsNullOrWhiteSpace(foundationProfileContext)
             ? memoryContext
@@ -501,7 +502,7 @@ Personal context and freshness rules:
 - If the user asks to summarize news by category across multiple sources, use this structure: source heading (DN/Aftonbladet/SVT), then category bullets under that source. Do not merge all sources into one category list, and do not omit a browsed source unless its page was blocked or empty.
 - For category news summaries, keep at most 3 category bullets under each source, use one distinct headline/story per bullet, and never repeat the same headline/story under the same source. If there are fewer reliable items, provide fewer bullets.
 - For Reddit requests, infer the appropriate subreddit URL from the user's wording and use web_browse. If Reddit returns a verification, login, or app wall, follow the web_browse tool guidance and try an appropriate public listing URL such as /r/<subreddit>/top/?t=day or old.reddit.com before reporting that browsing is blocked.
-- Build a durable local profile of the user over time. When the user shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project.
+- Build a durable local profile of the user over time. When the user explicitly shares stable preferences, identity details, recurring interests, favorite sources, projects, workflows, communication style, constraints, or long-term goals, use memory_write to store a concise profile memory with useful metadata such as category=profile, preference, interest, source, or project. The user's messages are the source of truth; never store assistant/model claims, guesses, apologies, uncertainty, or summaries as profile facts unless the user confirms them.
 - The memory graph is self-evolving: when storing memory, choose useful metadata keys yourself (for example category, topic, subject, project, tenant, preference, source, confidence, or relation) so future retrieval can join related memories without code changes. Related memories can coexist; do not assume one fact replaces another unless the user says it changed.
 - Prefer writing durable memories after satisfying the current user request, not before. Do not store transient facts, secrets, credentials, or sensitive personal data unless the user explicitly asks you to remember them.
 - Use remembered profile information to personalize tone and defaults, but never let personality override tool-use safety, routing, citations, or local-only constraints.
@@ -835,7 +836,7 @@ Browsed source bundle:
         return builder.Length == 0 ? "No relevant skills selected." : builder.ToString();
     }
 
-    private async Task<string> BuildMemoryContextAsync(AgentDefinition agent, string message, bool freshBrowsingRequest, CancellationToken cancellationToken)
+    private async Task<string> BuildMemoryContextAsync(AgentDefinition agent, string message, string memoryQuery, bool freshBrowsingRequest, CancellationToken cancellationToken)
     {
         if (!_options.Memory.Enabled)
         {
@@ -846,7 +847,7 @@ Browsed source bundle:
 
         try
         {
-            memories = await SearchMemoryContextAsync(agent, message, cancellationToken);
+            memories = await SearchMemoryContextAsync(agent, memoryQuery, cancellationToken);
         }
         catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)
         {
@@ -924,21 +925,45 @@ Browsed source bundle:
         return firstLine.Length <= 220 ? firstLine : firstLine[..220];
     }
 
-    private async Task<IReadOnlyList<MemorySearchResult>> SearchMemoryContextAsync(AgentDefinition agent, string message, CancellationToken cancellationToken)
+    private static string BuildMemoryQuery(AgentRunRequest request)
+    {
+        var recentContext = request.Messages?
+            .Where(message => message.Role.Equals("user", StringComparison.OrdinalIgnoreCase)
+                || message.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase))
+            .TakeLast(6)
+            .Select(message => $"{message.Role}: {TrimForMemoryQuery(message.Content)}")
+            .Where(line => !string.IsNullOrWhiteSpace(line))
+            .ToList() ?? [];
+
+        if (recentContext.Count == 0)
+        {
+            return request.Message;
+        }
+
+        return $"Current question: {request.Message}{Environment.NewLine}Recent context:{Environment.NewLine}{string.Join(Environment.NewLine, recentContext)}";
+    }
+
+    private static string TrimForMemoryQuery(string value)
+    {
+        var normalized = Regex.Replace(value, "\\s+", " ").Trim();
+        return normalized.Length <= 320 ? normalized : normalized[..320];
+    }
+
+    private async Task<IReadOnlyList<MemorySearchResult>> SearchMemoryContextAsync(AgentDefinition agent, string query, CancellationToken cancellationToken)
     {
         var bands = new List<(MemorySearchResult Result, int Priority)>();
         var limit = Math.Max(1, _options.Memory.MaxContextItems);
 
-        await AddMemoryBandAsync(bands, "profile_canonical", message, limit, -1, new Dictionary<string, string> { ["kind"] = "canonical_profile_fact" }, cancellationToken);
-        await AddMemoryBandAsync(bands, "core", message, limit, 0, new Dictionary<string, string> { ["category"] = "profile" }, cancellationToken);
-        await AddMemoryBandAsync(bands, "profile", message, limit, 1, null, cancellationToken);
-        await AddMemoryBandAsync(bands, agent.Name, message, limit, 2, null, cancellationToken);
+        await AddMemoryBandAsync(bands, "profile_canonical", query, limit, -1, new Dictionary<string, string> { ["kind"] = "canonical_profile_fact" }, cancellationToken);
+        await AddMemoryBandAsync(bands, "core", query, limit, 0, new Dictionary<string, string> { ["category"] = "profile" }, cancellationToken);
+        await AddMemoryBandAsync(bands, "profile", query, limit, 1, null, cancellationToken);
+        await AddMemoryBandAsync(bands, agent.Name, query, limit, 2, null, cancellationToken);
 
         if (!agent.Name.Equals("core", StringComparison.OrdinalIgnoreCase))
         {
             var summaries = await memoryStore.SearchAsync(new MemorySearchRequest(
                 Collection: "core",
-                Query: message,
+                Query: query,
                 Limit: Math.Max(1, _options.Memory.MaxContextItems / 2),
                 Filter: new Dictionary<string, string> { ["category"] = "session_summary" }), cancellationToken);
 
@@ -946,6 +971,7 @@ Browsed source bundle:
         }
 
         return bands
+            .Where(item => !IsNegativeKnowledgeMemory(item.Result.Text))
             .GroupBy(item => item.Result.Id, StringComparer.OrdinalIgnoreCase)
             .Select(group => group.OrderBy(item => item.Priority).ThenByDescending(item => item.Result.Score).First())
             .OrderBy(item => item.Priority)
@@ -970,6 +996,25 @@ Browsed source bundle:
         {
             bands.Add((WithCollectionMetadata(result, collection), priority));
         }
+    }
+
+    private static bool IsNegativeKnowledgeMemory(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return ContainsAny(lower,
+            "no specific information was provided",
+            "no specific information",
+            "i do not have specific information",
+            "i don't have specific information",
+            "do not have any specific information",
+            "don't have any specific information",
+            "not in my current memory",
+            "i don't have that detail",
+            "i do not have that detail",
+            "i don't know",
+            "i do not know",
+            "must have hallucinated",
+            "seems i must have hallucinated");
     }
 
     private static MemorySearchResult WithCollectionMetadata(MemorySearchResult result, string collection)
@@ -1181,11 +1226,14 @@ Browsed source bundle:
         {
             await memoryStore.UpsertAsync(new MemoryUpsertRequest(
                 Collection: agent.Name,
-                Text: $"User: {request.Message}{Environment.NewLine}{agent.Name}: {response}",
+                Text: $"User said: {request.Message}",
                 Metadata: new Dictionary<string, string>
                 {
                     ["agent"] = agent.Name,
-                    ["conversationId"] = request.ConversationId ?? string.Empty
+                    ["conversationId"] = request.ConversationId ?? string.Empty,
+                    ["kind"] = "user_turn",
+                    ["subject"] = "user",
+                    ["observedAt"] = DateTimeOffset.UtcNow.ToString("O")
                 }), cancellationToken);
         }
         catch (Exception exception) when (exception is InvalidOperationException or HttpRequestException)

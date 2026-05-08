@@ -56,6 +56,7 @@ public sealed class MemoryConsolidationService(
 
             writes.AddRange((payload.CoreMemories ?? [])
                 .Where(memory => !string.IsNullOrWhiteSpace(memory))
+                .Where(memory => !IsNegativeKnowledgeMemory(memory))
                 .Select(memory => new MemoryUpsertRequest(
                     Collection: collection,
                     Text: memory.Trim(),
@@ -70,6 +71,7 @@ public sealed class MemoryConsolidationService(
 
             writes.AddRange((payload.Interests ?? [])
                 .Where(interest => !string.IsNullOrWhiteSpace(interest))
+                .Where(interest => !IsNegativeKnowledgeMemory(interest))
                 .Select(interest => new MemoryUpsertRequest(
                     Collection: collection,
                     Text: interest.Trim(),
@@ -146,13 +148,18 @@ public sealed class MemoryConsolidationService(
     private async Task<MemoryConsolidationPayload> SummarizeForMemoryAsync(MemoryConsolidationRequest request, AssistantSession session, TaskGraph? graph, CancellationToken cancellationToken)
     {
         var graphContext = graph is null ? "No task graph recorded." : FormatTaskGraphMemory(graph);
-        var transcript = string.Join("\n", session.Messages.Select(message => $"{message.Role}: {message.Content}"));
+        var userTranscript = string.Join("\n", session.Messages
+            .Where(message => message.Role.Equals("user", StringComparison.OrdinalIgnoreCase))
+            .Select(message => $"user: {message.Content}"));
+        var assistantContext = string.Join("\n", session.Messages
+            .Where(message => message.Role.Equals("assistant", StringComparison.OrdinalIgnoreCase))
+            .Select(message => $"assistant: {TrimForContext(message.Content)}"));
         var response = await chatClient.ChatAsync(new LocalChatRequest(
             Model: request.Model ?? runtimeModels.GetCoordinatorModel(),
             Messages:
             [
-                new LocalChatMessage("system", "Consolidate this completed local assistant session into durable memory. Return exactly one JSON object with summary, coreMemories, interests, and openLoops. Store only facts, preferences, interests, goals, decisions, and follow-up items explicitly stated or requested by the user. Do not turn assistant-generated suggestions, questions, jokes, or speculative inferences into memories. Do not store secrets, credentials, or sensitive personal data unless explicitly requested. Keep each item concise and retrieval-friendly."),
-                new LocalChatMessage("user", $"Task graph:\n{graphContext}\n\nTranscript:\n{transcript}")
+                new LocalChatMessage("system", "Consolidate this completed local assistant session into durable memory. Return exactly one JSON object with summary, coreMemories, interests, and openLoops. The user is the source of truth. For coreMemories and interests, store only facts, preferences, interests, goals, decisions, and follow-up items explicitly stated or requested by user-authored messages. Assistant/model responses are non-authoritative context only: use them to understand what topic the user was replying to, but never treat assistant claims, guesses, summaries, apologies, refusals, uncertainty, questions, or suggestions as evidence about the user or their family. Never store negative knowledge such as 'no information was provided', 'I don't know', 'I don't have that detail', or 'that was hallucinated' as a profile memory. Do not store secrets, credentials, or sensitive personal data unless explicitly requested. Keep each item concise and retrieval-friendly."),
+                new LocalChatMessage("user", $"Task graph context, non-authoritative:\n{graphContext}\n\nUser-authored transcript, authoritative for profile memory:\n{userTranscript}\n\nAssistant response context, non-authoritative and not evidence for profile facts:\n{assistantContext}")
             ],
             Temperature: 0.2), cancellationToken);
 
@@ -188,6 +195,34 @@ public sealed class MemoryConsolidationService(
         var end = text.LastIndexOf('}');
         return start >= 0 && end > start ? text[start..(end + 1)] : null;
     }
+
+    private static string TrimForContext(string value)
+    {
+        var normalized = string.Join(' ', value.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
+        return normalized.Length <= 500 ? normalized : normalized[..500];
+    }
+
+    private static bool IsNegativeKnowledgeMemory(string text)
+    {
+        var lower = text.ToLowerInvariant();
+        return ContainsAny(lower,
+            "no specific information was provided",
+            "no specific information",
+            "i do not have specific information",
+            "i don't have specific information",
+            "do not have any specific information",
+            "don't have any specific information",
+            "not in my current memory",
+            "i don't have that detail",
+            "i do not have that detail",
+            "i don't know",
+            "i do not know",
+            "must have hallucinated",
+            "seems i must have hallucinated");
+    }
+
+    private static bool ContainsAny(string value, params string[] candidates) =>
+        candidates.Any(candidate => value.Contains(candidate, StringComparison.OrdinalIgnoreCase));
 
     private static string FormatTaskGraphMemory(TaskGraph graph) =>
         $"Goal: {graph.Goal}\nStatus: {graph.Status}\nConfidence: {graph.Confidence:0.00}\nActive node: {graph.ActiveNodeId ?? "none"}\nNodes:\n{string.Join("\n", graph.Nodes.Select(node => $"- {node.Status}: {node.Title}; confidence={node.Confidence:0.00}; blocker={node.Blocker ?? "none"}"))}\nArtifacts:\n{string.Join("\n", graph.Artifacts.Select(artifact => $"- {artifact.Kind}: {artifact.Title}"))}";
