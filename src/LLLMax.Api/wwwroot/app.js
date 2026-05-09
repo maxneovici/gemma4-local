@@ -19,6 +19,7 @@ const state = {
   memoryGraphFocusId: null,
   memoryGraphFocusLabel: null,
   memoryGraphDrillLevel: 0,
+  memoryGraphOnlyRelated: false,
   memoryGraphTypes: [],
   memoryGraphFilter: null,
   memoryGraphScope: 'total',
@@ -931,6 +932,7 @@ function renderMemoryDashboardStage(stats, profile, reflected) {
       <div class="graph-type-filters">
         ${memoryGraphTypes().map(type => `<button data-graph-type="${escapeHtml(type)}" class="${state.memoryGraphTypes.includes(type) ? 'active' : ''}" type="button">${escapeHtml(type)}</button>`).join('')}
         <span class="graph-filter-spacer"></span>
+        <label class="graph-related-toggle"><input id="memoryGraphOnlyRelated" type="checkbox" ${state.memoryGraphOnlyRelated ? 'checked' : ''}> display only selected</label>
         <input id="memoryGraphQuery" class="graph-search-input ${state.memoryGraphSearchOpen ? 'open' : ''}" value="${escapeHtml(state.memoryGraphQuery)}" placeholder="Search graph..." ${state.memoryGraphSearchOpen ? '' : 'hidden'}>
         <button id="openMemoryGraphSearch" class="graph-icon-button ${state.memoryGraphSearchOpen ? 'active' : ''}" type="button" aria-label="Search graph">${searchIconSvg()}</button>
         <button id="openMemoryReview" class="graph-icon-button ${state.memoryReviewOpen ? 'active' : ''}" type="button" aria-label="Review inbox">${messageIconSvg()}</button>
@@ -1011,6 +1013,10 @@ function bindMemoryGraphControls() {
     state.memoryReviewOpen = !state.memoryReviewOpen;
     renderMemoryDashboard(state.memoryStats, state.memoryProfile);
     renderMemoryReviewInbox();
+  });
+  $('memoryGraphOnlyRelated')?.addEventListener('change', event => {
+    state.memoryGraphOnlyRelated = event.target.checked;
+    renderMemoryGraphCanvas();
   });
   $('memoryGraphQuery')?.addEventListener('keydown', event => {
     if (event.key === 'Enter') {
@@ -1122,9 +1128,10 @@ function renderMemoryGraphCanvas() {
   const nodes = graph.nodes ?? [];
   const isDrilled = Boolean(state.memoryGraphFocusId);
   const showRecords = state.memoryGraphDrillLevel >= 2;
-  const visibleNodes = showRecords ? nodes : nodes.filter(node => node.kind !== 'record');
+  const graphView = selectVisibleGraph(nodes, edges, showRecords);
+  const visibleNodes = graphView.nodes;
+  const visibleEdges = graphView.edges;
   const visibleNodeById = new Map(visibleNodes.map(node => [node.id, node]));
-  const visibleEdges = showRecords ? edges : edges.filter(edge => edge.kind !== 'mentions');
 
   canvas.innerHTML = `
     <svg class="memory-graph-svg" viewBox="0 0 600 600" role="img" aria-label="${escapeHtml(graph.layer)} vector graph" tabindex="0">
@@ -1181,6 +1188,36 @@ function renderMemoryGraphCanvas() {
     }
   });
   renderMemoryGraphInspector(nodes.find(node => node.recordId === state.memoryGraphFocusId || node.id === state.memoryGraphFocusId) ?? null);
+}
+
+function selectVisibleGraph(nodes, edges, showRecords) {
+  const baseNodes = showRecords ? nodes : nodes.filter(node => node.kind !== 'record');
+  const baseNodeIds = new Set(baseNodes.map(node => node.id));
+  const baseEdges = (showRecords ? edges : edges.filter(edge => edge.kind !== 'mentions'))
+    .filter(edge => baseNodeIds.has(edge.source) && baseNodeIds.has(edge.target));
+
+  if (!state.memoryGraphOnlyRelated || !state.memoryGraphFocusId) {
+    return { nodes: baseNodes, edges: baseEdges };
+  }
+
+  const selected = nodes.find(node => node.id === state.memoryGraphFocusId || node.recordId === state.memoryGraphFocusId);
+
+  if (!selected) {
+    return { nodes: baseNodes, edges: baseEdges };
+  }
+
+  const selectedIds = new Set([selected.id]);
+
+  for (const edge of edges.filter(edge => edge.kind === 'mentions' && (edge.source === selected.id || edge.target === selected.id))) {
+    selectedIds.add(edge.source);
+    selectedIds.add(edge.target);
+  }
+
+  const filteredNodes = nodes.filter(node => selectedIds.has(node.id));
+  const filteredNodeIds = new Set(filteredNodes.map(node => node.id));
+  const filteredEdges = edges.filter(edge => edge.kind === 'mentions' && filteredNodeIds.has(edge.source) && filteredNodeIds.has(edge.target));
+
+  return { nodes: filteredNodes, edges: filteredEdges };
 }
 
 function renderGraphEdge(edge, nodeById, project, isDrilled = false) {

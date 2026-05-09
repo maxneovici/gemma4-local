@@ -239,6 +239,8 @@ textarea:focus, input:focus, select:focus { border-color: rgba(56, 189, 248, 0.4
 .graph-search-input { width: min(320px, 38vw); padding: 0.58rem 0.68rem; font-size: 0.76rem; }
 .graph-type-filters { grid-column: 1 / -1; display: flex; gap: 0.22rem; align-items: center; flex-wrap: wrap; margin-bottom: 0; }
 .graph-filter-spacer { flex: 1 1 auto; min-width: 1rem; }
+.graph-related-toggle { display: inline-flex; align-items: center; gap: 0.34rem; padding: 0.26rem 0.48rem; border: 1px solid rgba(56, 189, 248, 0.14); border-radius: 999px; color: var(--muted); background: rgba(8, 8, 9, 0.48); font-size: 0.56rem; text-transform: uppercase; letter-spacing: 0.07em; }
+.graph-related-toggle input { padding: 0; accent-color: var(--accent-2); }
 .graph-type-filters button { width: auto; padding: 0.21rem 0.38rem; border-radius: 999px; color: var(--muted); font-size: 0.54rem; text-transform: uppercase; letter-spacing: 0.07em; }
 .graph-type-filters button.active { border-color: rgba(20, 184, 166, 0.5); color: var(--accent-2); background: rgba(20, 184, 166, 0.1); }
 .memory-graph-canvas { position: relative; min-height: 0; height: 100%; border: 1px solid rgba(56, 189, 248, 0.12); border-radius: 20px; overflow: hidden; background: radial-gradient(circle at 50% 50%, rgba(56, 189, 248, 0.08), transparent 18rem), rgba(2, 6, 11, 0.7); }
